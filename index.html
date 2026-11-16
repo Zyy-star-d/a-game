@@ -1,0 +1,3148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>荒域幸存者 · 波次成长</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 30%, #14263b 0%, #070c14 44%, #020407 100%);
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+    }
+
+    canvas {
+      display: block;
+      width: min(100vw, calc(100vh * 16 / 9));
+      height: min(100vh, calc(100vw * 9 / 16));
+      background: #060b13;
+      box-shadow:
+        0 0 0 1px rgba(150, 201, 255, 0.12),
+        0 28px 100px rgba(0, 0, 0, 0.72);
+      cursor: crosshair;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="960" height="540" aria-label="荒域幸存者游戏画面"></canvas>
+
+  <script>
+    "use strict";
+
+    // 基础配置与波次参数集中管理，运行时属性统一存放在 stats。
+    const CONFIG = {
+      worldWidth: 960,
+      worldHeight: 540,
+      fixedStep: 1 / 60,
+      waves: {
+        total: 20,
+        duration: 30,
+        maxEnemies: 200,
+        healRatio: 0.2,
+        startingMaterials: 16,
+        spawnIntervals: [
+          0.90, 0.84, 0.78, 0.72, 0.67,
+          0.62, 0.57, 0.52, 0.47, 0.42,
+          0.38, 0.34, 0.30, 0.27, 0.24,
+          0.21, 0.18, 0.15, 0.13, 0.11
+        ],
+        enemyCaps: [
+          40, 55, 70, 90, 100,
+          110, 120, 130, 140, 150,
+          155, 165, 175, 180, 185,
+          190, 195, 200, 200, 200
+        ]
+      },
+      player: {
+        radius: 17,
+        baseHp: 100,
+        baseSpeed: 225,
+        contactDamage: 10,
+        hitCooldown: 0.65,
+        armorScale: 10,
+        dashSpeed: 620,
+        dashDuration: 0.18,
+        dashInvulnerability: 0.2,
+        dashCooldown: 1
+      },
+      weapon: {
+        baseFireInterval: 0.4,
+        bulletSpeed: 720,
+        bulletRadius: 3.5,
+        bulletLife: 1.3,
+        baseDamage: 1,
+        baseCritChance: 0.05,
+        baseCritMult: 2,
+        basePickupRadius: 58
+      },
+      enemies: {
+        baseHp: 1,
+        hpPerWave: 0.58,
+        minSpawnInterval: 0.085,
+        spawnPadding: 34,
+        xpValue: 1,
+        chaser: {
+          name: "追击者",
+          radius: 13,
+          hpMultiplier: 0.82,
+          speedBase: 70,
+          speedPerWave: 0.8,
+          contactDamage: 8,
+          color: "#ee465a",
+          weightBase: 0.8,
+          weightPerWave: -0.012
+        },
+        tank: {
+          name: "坦克",
+          radius: 23,
+          hpMultiplier: 3.6,
+          speedBase: 32,
+          speedPerWave: 0.35,
+          contactDamage: 17,
+          color: "#b060b8",
+          weightBase: 0.12,
+          weightPerWave: 0.012
+        },
+        shooter: {
+          name: "射手",
+          radius: 14,
+          hpMultiplier: 1.2,
+          speedBase: 48,
+          speedPerWave: 0.45,
+          contactDamage: 7,
+          color: "#4ecce8",
+          preferredDistance: 235,
+          shootInterval: 1.8,
+          projectileSpeed: 185,
+          projectileDamage: 8,
+          weightBase: 0.18,
+          weightPerWave: 0.01
+        },
+        bomber: {
+          name: "自爆兵",
+          radius: 16,
+          hpMultiplier: 1.05,
+          speedBase: 64,
+          speedPerWave: 0.7,
+          contactDamage: 0,
+          color: "#ff9c3d",
+          triggerDistance: 66,
+          fuseTime: 0.5,
+          explosionRadius: 92,
+          explosionDamage: 30,
+          weightBase: 0.15,
+          weightPerWave: 0.009
+        }
+      },
+      weapons: {
+        pistol: {
+          name: "手枪",
+          shortName: "手枪",
+          color: "#ffe36e",
+          price: 12,
+          cooldown: 0.58,
+          damage: 1,
+          range: 610,
+          projectileSpeed: 760,
+          projectileRadius: 3.5,
+          pellets: 1,
+          spread: 0,
+          type: "projectile"
+        },
+        shotgun: {
+          name: "霰弹枪",
+          shortName: "霰弹",
+          color: "#ff9d63",
+          price: 18,
+          cooldown: 1.05,
+          damage: 0.46,
+          range: 310,
+          projectileSpeed: 670,
+          projectileRadius: 3,
+          pellets: 5,
+          spread: 23,
+          type: "projectile"
+        },
+        smg: {
+          name: "冲锋枪",
+          shortName: "冲锋",
+          color: "#72e9ff",
+          price: 21,
+          cooldown: 0.115,
+          damage: 0.29,
+          range: 480,
+          projectileSpeed: 900,
+          projectileRadius: 2.2,
+          pellets: 1,
+          spread: 5.5,
+          type: "projectile"
+        },
+        laser: {
+          name: "激光束",
+          shortName: "激光",
+          color: "#ff74dd",
+          price: 26,
+          cooldown: 1.35,
+          damage: 3.1,
+          range: 740,
+          projectileSpeed: 0,
+          projectileRadius: 0,
+          pellets: 1,
+          spread: 0,
+          type: "laser"
+        }
+      },
+      orb: {
+        radius: 4,
+        attractSpeed: 285,
+        collectRadius: 13
+      },
+      material: {
+        radius: 4.5,
+        attractSpeed: 265,
+        collectRadius: 14
+      },
+      shop: {
+        itemCount: 4,
+        rerollCost: 5,
+        weaponSlotCount: 6,
+        weaponPriceVariance: 2,
+        statPriceMin: 8,
+        statPriceMax: 12
+      },
+      boss: {
+        waves: [5, 10, 15, 20],
+        baseHp: 240,
+        hpPerBoss: 100,
+        radius: 42,
+        speed: 42,
+        contactDamage: 24,
+        chargeTelegraph: 0.75,
+        chargeDuration: 0.55,
+        chargeSpeed: 430,
+        chargeCooldown: 3.8,
+        barrageInterval: 3.2,
+        barrageBulletCount: 14,
+        barrageBulletSpeed: 175,
+        barrageBulletDamage: 9
+      },
+      effects: {
+        hitFlashDuration: 0.1,
+        deathParticleMin: 6,
+        deathParticleMax: 10,
+        deathParticleLife: 1,
+        textLife: 0.72
+      },
+      upgrades: {
+        damageMultiplier: 1.1,
+        attackSpeedMultiplier: 1.1,
+        maxHpGain: 20,
+        maxHpHeal: 20,
+        moveSpeedMultiplier: 1.08,
+        critChanceGain: 0.05,
+        dodgeGain: 0.03,
+        dodgeCap: 0.6,
+        armorGain: 1,
+        pickupRadiusMultiplier: 1.3,
+        luckGain: 0.05
+      }
+    };
+
+    const BEST_KEY = "wasteland-survivor-best-wave";
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const keys = new Set();
+    const mouse = {
+      x: CONFIG.worldWidth / 2,
+      y: CONFIG.worldHeight / 2,
+      inside: false
+    };
+    const joystick = {
+      active: false,
+      pointerId: null,
+      baseX: 108,
+      baseY: CONFIG.worldHeight - 108,
+      knobX: 108,
+      knobY: CONFIG.worldHeight - 108,
+      dx: 0,
+      dy: 0
+    };
+    const VERSION = "v1.0";
+
+    let player;
+    let stats;
+    let enemies;
+    let bullets;
+    let enemyBullets;
+    let beams;
+    let floatingTexts;
+    let orbs;
+    let materialDrops;
+    let particles;
+    let weaponSlots;
+    let game;
+    let spawnTimer;
+    let fireTimer;
+    let elapsedSinceUpdate = 0;
+    let lastFrameTime = performance.now();
+    let statsPinned = false;
+    let upgradeChoices = [];
+    let upgradeCardRects = [];
+    let hoveredCard = -1;
+    let shopChoices = [];
+    let shopCardRects = [];
+    let shopActionRects = [];
+    let hoveredShopIndex = -1;
+    let replaceRects = [];
+    let pendingWeaponPurchase = null;
+    let bulletPool = [];
+    let enemyBulletPool = [];
+    let particlePool = [];
+    let textPool = [];
+    let audioContext = null;
+    let audioMaster = null;
+    let lastShotSoundTime = 0;
+    let debugPanelOpen = false;
+    let debugInvincible = false;
+    let measuredFps = 60;
+    let fpsAccumulator = 0;
+    let fpsFrameCount = 0;
+    let debugJumpRects = [];
+    let debugToggleRect = null;
+
+    const UPGRADE_POOL = [
+      {
+        id: "damage",
+        name: "高压弹头",
+        tag: "火力",
+        description: `伤害 +${Math.round((CONFIG.upgrades.damageMultiplier - 1) * 100)}%`,
+        tint: "#ff8d66",
+        apply() {
+          stats.damage *= CONFIG.upgrades.damageMultiplier;
+        }
+      },
+      {
+        id: "attackSpeed",
+        name: "急速机构",
+        tag: "射速",
+        description: `攻击速度 +${Math.round((CONFIG.upgrades.attackSpeedMultiplier - 1) * 100)}%`,
+        tint: "#ffe078",
+        apply() {
+          stats.attackSpeed *= CONFIG.upgrades.attackSpeedMultiplier;
+        }
+      },
+      {
+        id: "maxHp",
+        name: "强化装甲",
+        tag: "生存",
+        description: `最大生命 +${CONFIG.upgrades.maxHpGain}，并回复 ${CONFIG.upgrades.maxHpHeal}`,
+        tint: "#5de0aa",
+        apply() {
+          stats.maxHp += CONFIG.upgrades.maxHpGain;
+          player.hp = Math.min(stats.maxHp, player.hp + CONFIG.upgrades.maxHpHeal);
+        }
+      },
+      {
+        id: "moveSpeed",
+        name: "轻量步甲",
+        tag: "机动",
+        description: `移动速度 +${Math.round((CONFIG.upgrades.moveSpeedMultiplier - 1) * 100)}%`,
+        tint: "#68caff",
+        apply() {
+          stats.moveSpeed *= CONFIG.upgrades.moveSpeedMultiplier;
+        }
+      },
+      {
+        id: "critChance",
+        name: "弱点扫描",
+        tag: "暴击",
+        description: `暴击率 +${Math.round(CONFIG.upgrades.critChanceGain * 100)}%`,
+        tint: "#ff6d9c",
+        apply() {
+          stats.critChance = Math.min(1, stats.critChance + CONFIG.upgrades.critChanceGain);
+        }
+      },
+      {
+        id: "dodge",
+        name: "相位闪步",
+        tag: "闪避",
+        description: `闪避率 +${Math.round(CONFIG.upgrades.dodgeGain * 100)}%（递减）`,
+        tint: "#aa92ff",
+        apply() {
+          const remainingRatio =
+            1 - stats.dodge / CONFIG.upgrades.dodgeCap;
+          const gain =
+            CONFIG.upgrades.dodgeGain * Math.max(0.2, remainingRatio);
+          stats.dodge = Math.min(
+            CONFIG.upgrades.dodgeCap,
+            stats.dodge + gain
+          );
+        }
+      },
+      {
+        id: "armor",
+        name: "复合护板",
+        tag: "护甲",
+        description: `护甲 +${CONFIG.upgrades.armorGain}`,
+        tint: "#a8bfd2",
+        apply() {
+          stats.armor += CONFIG.upgrades.armorGain;
+        }
+      },
+      {
+        id: "pickupRadius",
+        name: "磁力线圈",
+        tag: "拾取",
+        description: `拾取范围 +${Math.round((CONFIG.upgrades.pickupRadiusMultiplier - 1) * 100)}%`,
+        tint: "#58e89b",
+        apply() {
+          stats.pickupRadius *= CONFIG.upgrades.pickupRadiusMultiplier;
+        }
+      },
+      {
+        id: "luck",
+        name: "幸运芯片",
+        tag: "幸运",
+        description: `幸运 +${Math.round(CONFIG.upgrades.luckGain * 100)}%`,
+        tint: "#ffb55d",
+        apply() {
+          stats.luck = Math.min(1, stats.luck + CONFIG.upgrades.luckGain);
+        }
+      }
+    ];
+
+    function createStats() {
+      return {
+        maxHp: CONFIG.player.baseHp,
+        damage: CONFIG.weapon.baseDamage,
+        attackSpeed: 1,
+        critChance: CONFIG.weapon.baseCritChance,
+        critMult: CONFIG.weapon.baseCritMult,
+        dodge: 0,
+        armor: 0,
+        moveSpeed: CONFIG.player.baseSpeed,
+        pickupRadius: CONFIG.weapon.basePickupRadius,
+        luck: 0
+      };
+    }
+
+    function createGameState() {
+      stats = createStats();
+      player = {
+        x: CONFIG.worldWidth / 2,
+        y: CONFIG.worldHeight / 2,
+        radius: CONFIG.player.radius,
+        hp: stats.maxHp,
+        hitFlash: 0,
+        hitCooldown: 0,
+        dodgeFlash: 0,
+        dashTimer: 0,
+        dashInvulnerability: 0,
+        dashCooldown: 0,
+        dashX: 0,
+        dashY: 0
+      };
+
+      enemies = [];
+      bullets = [];
+      enemyBullets = [];
+      beams = [];
+      floatingTexts = [];
+      orbs = [];
+      materialDrops = [];
+      particles = [];
+      weaponSlots = [
+        { type: "pistol", cooldown: 0, flash: 0 }
+      ];
+      spawnTimer = 0.8;
+      fireTimer = 0;
+      statsPinned = false;
+      upgradeChoices = [];
+      hoveredCard = -1;
+      shopChoices = [];
+      shopCardRects = [];
+      shopActionRects = [];
+      hoveredShopIndex = -1;
+      replaceRects = [];
+      pendingWeaponPurchase = null;
+      debugPanelOpen = false;
+      debugInvincible = false;
+      debugJumpRects = [];
+      debugToggleRect = null;
+      joystick.active = false;
+      joystick.pointerId = null;
+      joystick.dx = 0;
+      joystick.dy = 0;
+      joystick.visible =
+        navigator.maxTouchPoints > 0 ||
+        window.matchMedia("(pointer: coarse)").matches;
+
+      game = {
+        state: "playing",
+        wave: 1,
+        waveTime: CONFIG.waves.duration,
+        intermissionTime: 0,
+        waveBannerTime: 2.2,
+        time: 0,
+        kills: 0,
+        level: 1,
+        xp: 0,
+        xpRequired: xpRequiredForLevel(1),
+        pendingLevelUps: 0,
+        totalDamage: 0,
+        shake: 0,
+        dodgeTextTime: 0,
+        critTextTime: 0,
+        materials: CONFIG.waves.startingMaterials,
+        pendingMaterials: 0,
+        waveMaterialsEarned: 0,
+        shopWave: 0,
+        flashTime: 0,
+        bestWave: readBestWave(),
+        bossActive: false,
+        bossName: ""
+      };
+    }
+
+    function resetGame() {
+      createGameState();
+      lastFrameTime = performance.now();
+      elapsedSinceUpdate = 0;
+    }
+
+    function readBestWave() {
+      try {
+        const value = Number.parseInt(localStorage.getItem(BEST_KEY), 10);
+        return Number.isFinite(value) && value > 0 ? value : 1;
+      } catch {
+        return 1;
+      }
+    }
+
+    function recordBestWave(wave) {
+      if (wave <= game.bestWave) return;
+      game.bestWave = wave;
+      try {
+        localStorage.setItem(BEST_KEY, String(wave));
+      } catch {
+        // 本地存储不可用时不影响游戏。
+      }
+    }
+
+    function ensureAudio() {
+      if (audioContext) {
+        if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+        return;
+      }
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioContext = new AudioContextClass();
+      audioMaster = audioContext.createGain();
+      audioMaster.gain.value = 0.75;
+      audioMaster.connect(audioContext.destination);
+    }
+
+    function playTone(frequency, duration, type = "square", volume = 0.035, endFrequency = null) {
+      if (!audioContext || audioContext.state !== "running") return;
+      const now = audioContext.currentTime;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, now);
+      if (endFrequency) {
+        oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), now + duration);
+      }
+      gain.gain.setValueAtTime(volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      oscillator.connect(gain);
+      gain.connect(audioMaster);
+      oscillator.start(now);
+      oscillator.stop(now + duration);
+    }
+
+    function playNoise(duration = 0.18, volume = 0.05) {
+      if (!audioContext || audioContext.state !== "running") return;
+      const length = Math.max(1, Math.floor(audioContext.sampleRate * duration));
+      const buffer = audioContext.createBuffer(1, length, audioContext.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i += 1) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      const source = audioContext.createBufferSource();
+      const filter = audioContext.createBiquadFilter();
+      const gain = audioContext.createGain();
+      filter.type = "lowpass";
+      filter.frequency.value = 1100;
+      gain.gain.setValueAtTime(volume, audioContext.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + duration);
+      source.buffer = buffer;
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioMaster);
+      source.start();
+    }
+
+    const sounds = {
+      shoot(weaponType = "pistol") {
+        const now = performance.now();
+        if (weaponType === "smg" && now - lastShotSoundTime < 80) return;
+        lastShotSoundTime = now;
+        if (weaponType === "shotgun") {
+          playNoise(0.09, 0.055);
+          playTone(105, 0.08, "square", 0.025, 55);
+        } else if (weaponType === "laser") {
+          playTone(760, 0.16, "sawtooth", 0.04, 1450);
+        } else if (weaponType === "smg") {
+          playTone(280, 0.035, "square", 0.018, 190);
+        } else {
+          playTone(190, 0.055, "square", 0.022, 120);
+        }
+      },
+      hit() {
+        playTone(520, 0.04, "square", 0.018, 360);
+      },
+      kill() {
+        playTone(340, 0.07, "triangle", 0.03, 170);
+      },
+      hurt() {
+        playNoise(0.16, 0.05);
+        playTone(120, 0.16, "sawtooth", 0.035, 55);
+      },
+      explosion() {
+        playNoise(0.3, 0.085);
+        playTone(90, 0.28, "square", 0.045, 38);
+      },
+      purchase() {
+        playTone(440, 0.08, "square", 0.028, 660);
+      },
+      levelup() {
+        playTone(420, 0.12, "triangle", 0.035, 640);
+        setTimeout(() => playTone(640, 0.14, "triangle", 0.03, 880), 90);
+      },
+      dash() {
+        playNoise(0.1, 0.035);
+        playTone(280, 0.12, "sawtooth", 0.026, 760);
+      }
+    };
+
+    function acquireBullet() {
+      return bulletPool.pop() || {};
+    }
+
+    function releaseBullet(bullet) {
+      if (bulletPool.length < 600) bulletPool.push(bullet);
+    }
+
+    function acquireEnemyBullet() {
+      return enemyBulletPool.pop() || {};
+    }
+
+    function releaseEnemyBullet(bullet) {
+      if (enemyBulletPool.length < 300) enemyBulletPool.push(bullet);
+    }
+
+    function acquireParticle() {
+      return particlePool.pop() || {};
+    }
+
+    function releaseParticle(particle) {
+      if (particlePool.length < 500) particlePool.push(particle);
+    }
+
+    function acquireText() {
+      return textPool.pop() || {};
+    }
+
+    function releaseText(text) {
+      if (textPool.length < 200) textPool.push(text);
+    }
+
+    function spawnFloatingText(x, y, value, critical = false, color = null) {
+      const text = acquireText();
+      text.x = x;
+      text.y = y;
+      text.vx = (Math.random() * 2 - 1) * 18;
+      text.vy = -52 - Math.random() * 18;
+      text.life = CONFIG.effects.textLife;
+      text.maxLife = CONFIG.effects.textLife;
+      text.value = value;
+      text.critical = critical;
+      text.color = color || (critical ? "#ff78b6" : "#e8f7ff");
+      text.fontSize = critical ? 22 : 14;
+      floatingTexts.push(text);
+    }
+
+    function xpRequiredForLevel(level) {
+      return Math.floor(10 + level * 7 + Math.pow(level, 1.35) * 2);
+    }
+
+    function distanceSquared(a, b) {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      return dx * dx + dy * dy;
+    }
+
+    function normalize(x, y) {
+      const length = Math.hypot(x, y);
+      if (length === 0) return { x: 0, y: 0 };
+      return { x: x / length, y: y / length };
+    }
+
+    function isVisible(item, margin = 0) {
+      const radius = item.radius || 0;
+      return (
+        item.x + radius >= -margin &&
+        item.x - radius <= CONFIG.worldWidth + margin &&
+        item.y + radius >= -margin &&
+        item.y - radius <= CONFIG.worldHeight + margin
+      );
+    }
+
+    function getPointerPosition(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (CONFIG.worldWidth / rect.width),
+        y: (event.clientY - rect.top) * (CONFIG.worldHeight / rect.height)
+      };
+    }
+
+    function currentSpawnInterval() {
+      const index = Math.max(0, Math.min(
+        CONFIG.waves.spawnIntervals.length - 1,
+        game.wave - 1
+      ));
+      return Math.max(
+        CONFIG.enemies.minSpawnInterval,
+        CONFIG.waves.spawnIntervals[index]
+      );
+    }
+
+    function currentWaveEnemyCap() {
+      const index = Math.max(0, Math.min(
+        CONFIG.waves.enemyCaps.length - 1,
+        game.wave - 1
+      ));
+      return Math.min(CONFIG.waves.maxEnemies, CONFIG.waves.enemyCaps[index]);
+    }
+
+    function currentEnemyHp(type) {
+      const settings = CONFIG.enemies[type];
+      return (
+        CONFIG.enemies.baseHp +
+        (game.wave - 1) * CONFIG.enemies.hpPerWave
+      ) * settings.hpMultiplier;
+    }
+
+    function currentEnemySpeed(type) {
+      const settings = CONFIG.enemies[type];
+      return settings.speedBase + (game.wave - 1) * settings.speedPerWave;
+    }
+
+    function chooseEnemyType() {
+      const weights = [];
+      const addWeight = (type, weight) => {
+        if (weight > 0) weights.push({ type, weight });
+      };
+
+      const chaser = CONFIG.enemies.chaser;
+      const tank = CONFIG.enemies.tank;
+      const shooter = CONFIG.enemies.shooter;
+      const bomber = CONFIG.enemies.bomber;
+      addWeight("chaser", Math.max(0.35, chaser.weightBase + game.wave * chaser.weightPerWave));
+      addWeight("tank", game.wave >= 2 ? tank.weightBase + game.wave * tank.weightPerWave : 0);
+      addWeight("shooter", game.wave >= 3 ? shooter.weightBase + game.wave * shooter.weightPerWave : 0);
+      addWeight("bomber", game.wave >= 4 ? bomber.weightBase + game.wave * bomber.weightPerWave : 0);
+
+      const total = weights.reduce((sum, item) => sum + item.weight, 0);
+      let roll = Math.random() * total;
+      for (const item of weights) {
+        roll -= item.weight;
+        if (roll <= 0) return item.type;
+      }
+      return "chaser";
+    }
+
+    function spawnEnemy(forcedType = null) {
+      if (enemies.length >= currentWaveEnemyCap()) return;
+
+      const type = forcedType || chooseEnemyType();
+      const settings = CONFIG.enemies[type];
+      const padding = CONFIG.enemies.spawnPadding;
+      const side = Math.floor(Math.random() * 4);
+      let x;
+      let y;
+
+      // 出生位置在画面边界外，保证敌人从屏幕外进入。
+      if (side === 0) {
+        x = Math.random() * (CONFIG.worldWidth + padding * 2) - padding;
+        y = -padding;
+      } else if (side === 1) {
+        x = CONFIG.worldWidth + padding;
+        y = Math.random() * (CONFIG.worldHeight + padding * 2) - padding;
+      } else if (side === 2) {
+        x = Math.random() * (CONFIG.worldWidth + padding * 2) - padding;
+        y = CONFIG.worldHeight + padding;
+      } else {
+        x = -padding;
+        y = Math.random() * (CONFIG.worldHeight + padding * 2) - padding;
+      }
+
+      const radius = settings.radius + (Math.random() * 2 - 1) * (type === "tank" ? 2.5 : 1.5);
+      const maxHp = currentEnemyHp(type);
+      enemies.push({
+        type,
+        x,
+        y,
+        radius,
+        speed: currentEnemySpeed(type) + (Math.random() * 2 - 1) * 4,
+        hp: maxHp,
+        maxHp,
+        phase: Math.random() * Math.PI * 2,
+        hitFlash: 0,
+        shootTimer: 0.7 + Math.random() * 0.8,
+        bomberState: "chasing",
+        fuseTimer: 0
+      });
+    }
+
+    function findNearestEnemy() {
+      let nearest = null;
+      let nearestDistance = Infinity;
+
+      for (const enemy of enemies) {
+        const currentDistance = distanceSquared(player, enemy);
+        if (currentDistance < nearestDistance) {
+          nearest = enemy;
+          nearestDistance = currentDistance;
+        }
+      }
+
+      return nearest;
+    }
+
+    function createProjectile(enemy, weapon, angleOffset = 0) {
+      const baseAngle = Math.atan2(enemy.y - player.y, enemy.x - player.x);
+      const angle = baseAngle + angleOffset;
+      const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+      const critical = Math.random() < stats.critChance;
+      const damage = stats.damage * weapon.damage * (critical ? stats.critMult : 1);
+      const muzzleDistance = player.radius + 8;
+
+      const projectile = acquireBullet();
+      projectile.x = player.x + direction.x * muzzleDistance;
+      projectile.y = player.y + direction.y * muzzleDistance;
+      projectile.vx = direction.x * weapon.projectileSpeed;
+      projectile.vy = direction.y * weapon.projectileSpeed;
+      projectile.radius = weapon.projectileRadius + (critical ? 0.8 : 0);
+      projectile.life = weapon.range / weapon.projectileSpeed;
+      projectile.damage = damage;
+      projectile.critical = critical;
+      projectile.weaponType = weapon.type;
+      projectile.color = weapon.color;
+      bullets.push(projectile);
+    }
+
+    function fireWeaponSlot(slot, enemy) {
+      const weapon = CONFIG.weapons[slot.type];
+      const distance = Math.sqrt(distanceSquared(player, enemy));
+      if (distance > weapon.range) return false;
+
+      if (weapon.type === "laser") {
+        sounds.shoot("laser");
+        const critical = Math.random() < stats.critChance;
+        const damage = stats.damage * weapon.damage * (critical ? stats.critMult : 1);
+        beams.push({
+          x1: player.x,
+          y1: player.y,
+          x2: enemy.x,
+          y2: enemy.y,
+          life: 0.12,
+          maxLife: 0.12,
+          color: weapon.color
+        });
+        if (damageEnemy(enemy, { damage, critical, color: weapon.color })) {
+          const index = enemies.indexOf(enemy);
+          if (index >= 0) enemies.splice(index, 1);
+        }
+        return true;
+      }
+
+      if (weapon.pellets === 1) {
+        sounds.shoot(slot.type);
+        const jitter = (Math.random() * 2 - 1) * (weapon.spread * Math.PI / 180);
+        createProjectile(enemy, weapon, jitter);
+        return true;
+      }
+
+      const spread = weapon.spread * Math.PI / 180;
+      sounds.shoot(slot.type);
+      for (let i = 0; i < weapon.pellets; i += 1) {
+        const ratio = weapon.pellets === 1 ? 0 : i / (weapon.pellets - 1) - 0.5;
+        const jitter = (Math.random() * 2 - 1) * 0.012;
+        createProjectile(enemy, weapon, ratio * spread + jitter);
+      }
+      return true;
+    }
+
+    function updateWeapons(dt) {
+      for (const slot of weaponSlots) {
+        const weapon = CONFIG.weapons[slot.type];
+        slot.cooldown = Math.max(0, slot.cooldown - dt);
+        slot.flash = Math.max(0, slot.flash - dt);
+        const nearestEnemy = findNearestEnemy();
+        if (!nearestEnemy || slot.cooldown > 0) continue;
+
+        if (fireWeaponSlot(slot, nearestEnemy)) {
+          slot.cooldown = weapon.cooldown / stats.attackSpeed;
+          slot.flash = 0.1;
+        }
+      }
+    }
+
+    function spawnParticles(x, y, color, count = 5) {
+      for (let i = 0; i < count; i += 1) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 45 + Math.random() * 100;
+        const particle = acquireParticle();
+        particle.x = x;
+        particle.y = y;
+        particle.vx = Math.cos(angle) * speed;
+        particle.vy = Math.sin(angle) * speed;
+        particle.life = 0.7 + Math.random() * 0.3;
+        particle.maxLife = 1;
+        particle.radius = 1.5 + Math.random() * 1.8;
+        particle.color = color;
+        particles.push(particle);
+      }
+    }
+
+    function spawnXpOrb(enemy) {
+      const bonus = Math.random() < stats.luck ? 1 : 0;
+      orbs.push({
+        x: enemy.x,
+        y: enemy.y,
+        radius: CONFIG.orb.radius,
+        value: CONFIG.enemies.xpValue + Math.floor((game.wave - 1) / 5) + bonus,
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+
+    function spawnMaterialDrop(enemy) {
+      const value = 1 + Math.floor((game.wave - 1) / 5);
+      materialDrops.push({
+        x: enemy.x + (Math.random() * 2 - 1) * 8,
+        y: enemy.y + (Math.random() * 2 - 1) * 8,
+        radius: CONFIG.material.radius,
+        value,
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+
+    function damagePlayer(rawDamage) {
+      if (debugInvincible) return;
+      if (
+        player.hitCooldown > 0 ||
+        player.dashInvulnerability > 0 ||
+        game.state !== "playing"
+      ) {
+        return;
+      }
+
+      if (Math.random() < stats.dodge) {
+        player.hitCooldown = CONFIG.player.hitCooldown * 0.55;
+        player.dodgeFlash = 0.22;
+        game.dodgeTextTime = 0.7;
+        return;
+      }
+
+      const armorMultiplier =
+        CONFIG.player.armorScale / (CONFIG.player.armorScale + stats.armor);
+      const finalDamage = Math.max(1, Math.round(rawDamage * armorMultiplier));
+
+      player.hp = Math.max(0, player.hp - finalDamage);
+      player.hitCooldown = CONFIG.player.hitCooldown;
+      player.hitFlash = CONFIG.effects.hitFlashDuration;
+      game.shake = Math.max(game.shake, 8);
+      game.flashTime = CONFIG.effects.hitFlashDuration;
+      sounds.hurt();
+
+      if (player.hp <= 0) {
+        game.state = "gameover";
+      }
+    }
+
+    function damageEnemy(enemy, bullet) {
+      enemy.hp -= bullet.damage;
+      enemy.hitFlash = 0.09;
+      game.totalDamage += bullet.damage;
+      game.critTextTime = bullet.critical ? 0.42 : game.critTextTime;
+      spawnFloatingText(
+        enemy.x,
+        enemy.y - enemy.radius - 4,
+        bullet.critical ? `${bullet.damage.toFixed(1)}!` : bullet.damage.toFixed(1),
+        bullet.critical,
+        bullet.critical ? null : bullet.color
+      );
+      sounds.hit();
+
+      if (enemy.hp > 0) return false;
+
+      if (enemy.type === "boss") {
+        for (let i = 0; i < 8; i += 1) spawnXpOrb(enemy);
+        for (let i = 0; i < 12; i += 1) spawnMaterialDrop(enemy);
+        spawnParticles(enemy.x, enemy.y, "#ff78b6", 32);
+        game.shake = Math.max(game.shake, 14);
+        game.bossActive = false;
+        sounds.explosion();
+        game.kills += 1;
+        return true;
+      }
+
+      spawnXpOrb(enemy);
+      spawnMaterialDrop(enemy);
+      spawnParticles(
+        enemy.x,
+        enemy.y,
+        "#ff7585",
+        CONFIG.effects.deathParticleMin +
+          Math.floor(Math.random() * (CONFIG.effects.deathParticleMax - CONFIG.effects.deathParticleMin + 1))
+      );
+      sounds.kill();
+      game.kills += 1;
+      return true;
+    }
+
+    function updatePlayer(dt) {
+      let moveX = 0;
+      let moveY = 0;
+
+      player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+      player.dashInvulnerability = Math.max(0, player.dashInvulnerability - dt);
+      player.dashTimer = Math.max(0, player.dashTimer - dt);
+
+      if (player.dashTimer > 0) {
+        player.x += player.dashX * CONFIG.player.dashSpeed * dt;
+        player.y += player.dashY * CONFIG.player.dashSpeed * dt;
+      } else {
+        if (keys.has("KeyW") || keys.has("ArrowUp")) moveY -= 1;
+        if (keys.has("KeyS") || keys.has("ArrowDown")) moveY += 1;
+        if (keys.has("KeyA") || keys.has("ArrowLeft")) moveX -= 1;
+        if (keys.has("KeyD") || keys.has("ArrowRight")) moveX += 1;
+        if (joystick.active && Math.hypot(joystick.dx, joystick.dy) > 0.04) {
+          moveX = joystick.dx;
+          moveY = joystick.dy;
+        }
+
+        const direction = normalize(moveX, moveY);
+        player.x += direction.x * stats.moveSpeed * dt;
+        player.y += direction.y * stats.moveSpeed * dt;
+      }
+
+      const margin = player.radius + 8;
+      player.x = Math.max(margin, Math.min(CONFIG.worldWidth - margin, player.x));
+      player.y = Math.max(margin, Math.min(CONFIG.worldHeight - margin, player.y));
+
+      player.hitCooldown = Math.max(0, player.hitCooldown - dt);
+      player.hitFlash = Math.max(0, player.hitFlash - dt);
+      player.dodgeFlash = Math.max(0, player.dodgeFlash - dt);
+    }
+
+    function startDash() {
+      if (game.state !== "playing" || player.dashCooldown > 0 || player.dashTimer > 0) {
+        return false;
+      }
+
+      let moveX = 0;
+      let moveY = 0;
+      if (keys.has("KeyW") || keys.has("ArrowUp")) moveY -= 1;
+      if (keys.has("KeyS") || keys.has("ArrowDown")) moveY += 1;
+      if (keys.has("KeyA") || keys.has("ArrowLeft")) moveX -= 1;
+      if (keys.has("KeyD") || keys.has("ArrowRight")) moveX += 1;
+      if (joystick.active && Math.hypot(joystick.dx, joystick.dy) > 0.04) {
+        moveX = joystick.dx;
+        moveY = joystick.dy;
+      }
+      const direction = normalize(moveX, moveY);
+      const fallback = normalize(mouse.x - player.x, mouse.y - player.y);
+      player.dashX = direction.x || direction.y ? direction.x : fallback.x;
+      player.dashY = direction.x || direction.y ? direction.y : fallback.y;
+      player.dashTimer = CONFIG.player.dashDuration;
+      player.dashInvulnerability = CONFIG.player.dashInvulnerability;
+      player.dashCooldown = CONFIG.player.dashCooldown;
+      sounds.dash();
+      return true;
+    }
+
+    function tapFire() {
+      if (game.state !== "playing") return false;
+      const target = findNearestEnemy();
+      if (!target) return false;
+      let fired = false;
+      for (const slot of weaponSlots) {
+        if (slot.cooldown > 0) continue;
+        const weapon = CONFIG.weapons[slot.type];
+        if (fireWeaponSlot(slot, target)) {
+          slot.cooldown = weapon.cooldown / stats.attackSpeed;
+          slot.flash = 0.1;
+          fired = true;
+        }
+      }
+      return fired;
+    }
+
+    function updateJoystick(position) {
+      const maxDistance = 43;
+      let dx = position.x - joystick.baseX;
+      let dy = position.y - joystick.baseY;
+      const distance = Math.hypot(dx, dy);
+      if (distance > maxDistance) {
+        dx = dx / distance * maxDistance;
+        dy = dy / distance * maxDistance;
+      }
+      joystick.knobX = joystick.baseX + dx;
+      joystick.knobY = joystick.baseY + dy;
+      joystick.dx = dx / maxDistance;
+      joystick.dy = dy / maxDistance;
+    }
+
+    function spawnBoss() {
+      if (!CONFIG.boss.waves.includes(game.wave)) return null;
+      const bossIndex = CONFIG.boss.waves.indexOf(game.wave);
+      const maxHp = CONFIG.boss.baseHp + bossIndex * CONFIG.boss.hpPerBoss;
+      const fromLeft = Math.random() < 0.5;
+      const boss = {
+        type: "boss",
+        x: fromLeft ? -70 : CONFIG.worldWidth + 70,
+        y: CONFIG.worldHeight / 2,
+        radius: CONFIG.boss.radius,
+        speed: CONFIG.boss.speed + bossIndex * 3,
+        hp: maxHp,
+        maxHp,
+        phase: 0,
+        hitFlash: 0,
+        bossMode: "chase",
+        modeTimer: 0,
+        attackTimer: 2.2,
+        attackCounter: 0,
+        chargeX: 0,
+        chargeY: 0,
+        contactCooldown: 0
+      };
+      enemies.push(boss);
+      game.bossActive = true;
+      game.bossName = `裂隙守卫 · ${bossIndex + 1}`;
+      return boss;
+    }
+
+    function updateBoss(boss, dt) {
+      const direction = normalize(player.x - boss.x, player.y - boss.y);
+      boss.phase += dt * 2.4;
+      boss.hitFlash = Math.max(0, boss.hitFlash - dt);
+      boss.contactCooldown = Math.max(0, boss.contactCooldown - dt);
+
+      if (boss.bossMode === "telegraph") {
+        boss.modeTimer -= dt;
+        if (boss.modeTimer <= 0) {
+          boss.bossMode = "charging";
+          boss.modeTimer = CONFIG.boss.chargeDuration;
+          boss.chargeX = direction.x;
+          boss.chargeY = direction.y;
+        }
+      } else if (boss.bossMode === "charging") {
+        boss.x += boss.chargeX * CONFIG.boss.chargeSpeed * dt;
+        boss.y += boss.chargeY * CONFIG.boss.chargeSpeed * dt;
+        boss.modeTimer -= dt;
+        if (
+          boss.contactCooldown <= 0 &&
+          distanceSquared(player, boss) <
+            (player.radius + boss.radius) * (player.radius + boss.radius)
+        ) {
+          damagePlayer(CONFIG.boss.contactDamage + game.wave * 0.5);
+          boss.contactCooldown = 0.8;
+        }
+        if (boss.modeTimer <= 0) {
+          boss.bossMode = "chase";
+          boss.attackTimer = CONFIG.boss.chargeCooldown;
+        }
+      } else {
+        boss.x += direction.x * boss.speed * dt;
+        boss.y += direction.y * boss.speed * dt;
+        boss.attackTimer -= dt;
+        if (boss.attackTimer <= 0) {
+          boss.attackCounter += 1;
+          if (boss.attackCounter % 2 === 1) {
+            boss.bossMode = "telegraph";
+            boss.modeTimer = CONFIG.boss.chargeTelegraph;
+          } else {
+            fireBossBarrage(boss);
+            boss.attackTimer = CONFIG.boss.barrageInterval;
+          }
+        }
+      }
+    }
+
+    function fireBossBarrage(boss) {
+      const count = CONFIG.boss.barrageBulletCount;
+      const offset = Math.random() * Math.PI * 2;
+      for (let i = 0; i < count; i += 1) {
+        const angle = offset + i * (Math.PI * 2 / count);
+        const projectile = acquireEnemyBullet();
+        projectile.x = boss.x;
+        projectile.y = boss.y;
+        projectile.vx = Math.cos(angle) * CONFIG.boss.barrageBulletSpeed;
+        projectile.vy = Math.sin(angle) * CONFIG.boss.barrageBulletSpeed;
+        projectile.radius = 6;
+        projectile.life = 4;
+        projectile.damage = CONFIG.boss.barrageBulletDamage + game.wave * 0.35;
+        enemyBullets.push(projectile);
+      }
+      sounds.explosion();
+    }
+
+    function updateEnemies(dt) {
+      for (let i = enemies.length - 1; i >= 0; i -= 1) {
+        const enemy = enemies[i];
+        if (enemy.type === "boss") {
+          updateBoss(enemy, dt);
+          continue;
+        }
+        const settings = CONFIG.enemies[enemy.type];
+        const direction = normalize(player.x - enemy.x, player.y - enemy.y);
+        const distance = Math.sqrt(distanceSquared(player, enemy));
+        enemy.phase += dt * 5;
+        enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+
+        if (enemy.type === "shooter") {
+          enemy.shootTimer -= dt;
+          if (distance > settings.preferredDistance + 28) {
+            enemy.x += direction.x * enemy.speed * dt;
+            enemy.y += direction.y * enemy.speed * dt;
+          } else if (distance < settings.preferredDistance - 32) {
+            enemy.x -= direction.x * enemy.speed * dt;
+            enemy.y -= direction.y * enemy.speed * dt;
+          } else {
+            // 中距离时绕着玩家横移，既保持距离又避免完全静止。
+            enemy.x += -direction.y * enemy.speed * 0.32 * dt;
+            enemy.y += direction.x * enemy.speed * 0.32 * dt;
+          }
+
+          if (enemy.shootTimer <= 0 && distance < 470 && game.state === "playing") {
+            const projectile = acquireEnemyBullet();
+            projectile.x = enemy.x;
+            projectile.y = enemy.y;
+            projectile.vx = direction.x * settings.projectileSpeed;
+            projectile.vy = direction.y * settings.projectileSpeed;
+            projectile.radius = 5;
+            projectile.life = 3.2;
+            projectile.damage = settings.projectileDamage + game.wave * 0.28;
+            enemyBullets.push(projectile);
+            enemy.shootTimer = settings.shootInterval;
+          }
+        } else if (enemy.type === "bomber") {
+          if (enemy.bomberState === "fusing") {
+            enemy.fuseTimer -= dt;
+            if (enemy.fuseTimer <= 0) {
+              explodeBomber(enemy);
+              enemies.splice(i, 1);
+              continue;
+            }
+          } else {
+            if (distance <= settings.triggerDistance) {
+              enemy.bomberState = "fusing";
+              enemy.fuseTimer = settings.fuseTime;
+            } else {
+              enemy.x += direction.x * enemy.speed * dt;
+              enemy.y += direction.y * enemy.speed * dt;
+            }
+          }
+        } else {
+          enemy.x += direction.x * enemy.speed * dt;
+          enemy.y += direction.y * enemy.speed * dt;
+        }
+
+        if (
+          enemy.type !== "bomber" &&
+          distanceSquared(player, enemy) <
+            (player.radius + enemy.radius) * (player.radius + enemy.radius)
+        ) {
+          damagePlayer(
+            settings.contactDamage +
+            (game.wave - 1) * (enemy.type === "tank" ? 0.7 : 0.35)
+          );
+        }
+      }
+    }
+
+    function explodeBomber(enemy) {
+      const settings = CONFIG.enemies.bomber;
+      const radius = settings.explosionRadius;
+      spawnParticles(enemy.x, enemy.y, "#ffae4a", 14);
+      game.shake = Math.max(game.shake, 7);
+      sounds.explosion();
+
+      if (Math.sqrt(distanceSquared(player, enemy)) < radius + player.radius) {
+        damagePlayer(settings.explosionDamage + (game.wave - 1) * 0.9);
+      }
+    }
+
+    function updateEnemyBullets(dt) {
+      for (let i = enemyBullets.length - 1; i >= 0; i -= 1) {
+        const projectile = enemyBullets[i];
+        projectile.x += projectile.vx * dt;
+        projectile.y += projectile.vy * dt;
+        projectile.life -= dt;
+
+        const hitDistance = player.radius + projectile.radius;
+        if (distanceSquared(player, projectile) < hitDistance * hitDistance) {
+          damagePlayer(projectile.damage);
+          releaseEnemyBullet(projectile);
+          enemyBullets.splice(i, 1);
+          continue;
+        }
+
+        if (
+          projectile.life <= 0 ||
+          projectile.x < -40 ||
+          projectile.x > CONFIG.worldWidth + 40 ||
+          projectile.y < -40 ||
+          projectile.y > CONFIG.worldHeight + 40
+        ) {
+          releaseEnemyBullet(projectile);
+          enemyBullets.splice(i, 1);
+        }
+      }
+    }
+
+    function updateBeams(dt) {
+      for (let i = beams.length - 1; i >= 0; i -= 1) {
+        beams[i].life -= dt;
+        if (beams[i].life <= 0) beams.splice(i, 1);
+      }
+    }
+
+    function updateBullets(dt) {
+      for (let b = bullets.length - 1; b >= 0; b -= 1) {
+        const bullet = bullets[b];
+        bullet.x += bullet.vx * dt;
+        bullet.y += bullet.vy * dt;
+        bullet.life -= dt;
+
+        let bulletRemoved = false;
+
+        for (let e = enemies.length - 1; e >= 0; e -= 1) {
+          const enemy = enemies[e];
+          const hitDistance = bullet.radius + enemy.radius;
+
+          if (distanceSquared(bullet, enemy) < hitDistance * hitDistance) {
+            if (damageEnemy(enemy, bullet)) {
+              enemies.splice(e, 1);
+            }
+            bulletRemoved = true;
+            break;
+          }
+        }
+
+        const outOfBounds =
+          bullet.x < -40 ||
+          bullet.x > CONFIG.worldWidth + 40 ||
+          bullet.y < -40 ||
+          bullet.y > CONFIG.worldHeight + 40;
+
+        if (bulletRemoved || bullet.life <= 0 || outOfBounds) {
+          releaseBullet(bullet);
+          bullets.splice(b, 1);
+        }
+      }
+    }
+
+    function updateOrbs(dt) {
+      for (let i = orbs.length - 1; i >= 0; i -= 1) {
+        const orb = orbs[i];
+        orb.phase += dt * 4;
+        const distance = Math.sqrt(distanceSquared(player, orb));
+
+        if (distance <= stats.pickupRadius) {
+          const direction = normalize(player.x - orb.x, player.y - orb.y);
+          const attraction = 1 - distance / Math.max(stats.pickupRadius, 1);
+          const speed = CONFIG.orb.attractSpeed * (0.35 + attraction * 0.9);
+          orb.x += direction.x * speed * dt;
+          orb.y += direction.y * speed * dt;
+        }
+
+        if (distance < player.radius + CONFIG.orb.collectRadius) {
+          gainXp(orb.value);
+          orbs.splice(i, 1);
+        }
+      }
+    }
+
+    function updateMaterialDrops(dt) {
+      for (let i = materialDrops.length - 1; i >= 0; i -= 1) {
+        const material = materialDrops[i];
+        material.phase += dt * 4;
+        const distance = Math.sqrt(distanceSquared(player, material));
+
+        if (distance <= stats.pickupRadius) {
+          const direction = normalize(player.x - material.x, player.y - material.y);
+          const attraction = 1 - distance / Math.max(stats.pickupRadius, 1);
+          const speed = CONFIG.material.attractSpeed * (0.36 + attraction * 0.9);
+          material.x += direction.x * speed * dt;
+          material.y += direction.y * speed * dt;
+        }
+
+        if (distance < player.radius + CONFIG.material.collectRadius) {
+          game.pendingMaterials += material.value;
+          game.waveMaterialsEarned += material.value;
+          materialDrops.splice(i, 1);
+        }
+      }
+    }
+
+    function updateParticles(dt) {
+      for (let i = particles.length - 1; i >= 0; i -= 1) {
+        const particle = particles[i];
+        particle.x += particle.vx * dt;
+        particle.y += particle.vy * dt;
+        particle.vx *= 0.94;
+        particle.vy *= 0.94;
+        particle.life -= dt;
+
+        if (particle.life <= 0) {
+          releaseParticle(particle);
+          particles.splice(i, 1);
+        }
+      }
+    }
+
+    function updateFloatingTexts(dt) {
+      for (let i = floatingTexts.length - 1; i >= 0; i -= 1) {
+        const text = floatingTexts[i];
+        text.x += text.vx * dt;
+        text.y += text.vy * dt;
+        text.vy *= 0.96;
+        text.life -= dt;
+        if (text.life <= 0) {
+          releaseText(text);
+          floatingTexts.splice(i, 1);
+        }
+      }
+    }
+
+    function gainXp(amount) {
+      game.xp += amount;
+      while (game.xp >= game.xpRequired) {
+        game.xp -= game.xpRequired;
+        game.level += 1;
+        game.xpRequired = xpRequiredForLevel(game.level);
+        game.pendingLevelUps += 1;
+      }
+
+      if (game.pendingLevelUps > 0 && game.state === "playing") {
+        openUpgradeChoices();
+      }
+    }
+
+    function chooseUpgradeChoices() {
+      const pool = UPGRADE_POOL.slice();
+      const results = [];
+
+      while (results.length < 3 && pool.length > 0) {
+        const index = Math.floor(Math.random() * pool.length);
+        results.push(pool.splice(index, 1)[0]);
+      }
+
+      return results;
+    }
+
+    function openUpgradeChoices() {
+      upgradeChoices = chooseUpgradeChoices();
+      hoveredCard = -1;
+      game.state = "levelup";
+      sounds.levelup();
+    }
+
+    function selectUpgrade(index) {
+      if (game.state !== "levelup" || !upgradeChoices[index]) return;
+      upgradeChoices[index].apply();
+      upgradeChoices = [];
+      game.pendingLevelUps = Math.max(0, game.pendingLevelUps - 1);
+      player.hp = Math.min(player.hp, stats.maxHp);
+      game.state = "playing";
+      lastFrameTime = performance.now();
+
+      // 一次拾取可能积累多级经验，选卡后继续处理尚未领取的升级。
+      if (game.pendingLevelUps > 0) {
+        openUpgradeChoices();
+      }
+    }
+
+    function finishWave() {
+      enemies.length = 0;
+      bullets.length = 0;
+      enemyBullets.length = 0;
+      beams.length = 0;
+      materialDrops.length = 0;
+      game.bossActive = false;
+      game.materials += game.pendingMaterials;
+      game.pendingMaterials = 0;
+      player.hp = Math.min(stats.maxHp, player.hp + stats.maxHp * CONFIG.waves.healRatio);
+      game.shopWave = game.wave;
+      generateShopChoices();
+      game.state = "shop";
+    }
+
+    function startNextWave() {
+      if (game.wave >= CONFIG.waves.total) {
+        game.state = "victory";
+        return;
+      }
+
+      game.wave += 1;
+      recordBestWave(game.wave);
+      game.waveTime = CONFIG.waves.duration;
+      game.waveBannerTime = 2.2;
+      spawnTimer = 0.45;
+      fireTimer = 0;
+      shopChoices = [];
+      pendingWeaponPurchase = null;
+      game.bossActive = false;
+      game.bossName = "";
+      game.state = "playing";
+      spawnBoss();
+    }
+
+    function jumpToWave(targetWave) {
+      const wave = Math.max(1, Math.min(CONFIG.waves.total, Math.floor(targetWave)));
+      game.wave = wave;
+      game.waveTime = CONFIG.waves.duration;
+      game.waveBannerTime = 1;
+      game.state = "playing";
+      game.bossActive = false;
+      game.bossName = "";
+      enemies = [];
+      bullets = [];
+      enemyBullets = [];
+      beams = [];
+      materialDrops = [];
+      orbs = [];
+      particles = [];
+      floatingTexts = [];
+      player.hp = stats.maxHp;
+      spawnTimer = 0.2;
+      recordBestWave(wave);
+      spawnBoss();
+      lastFrameTime = performance.now();
+      elapsedSinceUpdate = 0;
+    }
+
+    function randomChoice(list) {
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    function generateShopChoices() {
+      const weaponIds = Object.keys(CONFIG.weapons);
+      const choices = [];
+
+      while (choices.length < CONFIG.shop.itemCount) {
+        if (Math.random() < 0.48) {
+          const weaponId = randomChoice(weaponIds);
+          const weapon = CONFIG.weapons[weaponId];
+          const variance = Math.floor(Math.random() * (CONFIG.shop.weaponPriceVariance + 1));
+          choices.push({
+            kind: "weapon",
+            weaponId,
+            name: weapon.name,
+            description: `伤害 ${weapon.damage.toFixed(2)} · 冷却 ${weapon.cooldown.toFixed(2)}s`,
+            color: weapon.color,
+            price: weapon.price + variance,
+            sold: false
+          });
+        } else {
+          const upgrade = randomChoice(UPGRADE_POOL);
+          const price =
+            CONFIG.shop.statPriceMin +
+            Math.floor(Math.random() * (CONFIG.shop.statPriceMax - CONFIG.shop.statPriceMin + 1));
+          choices.push({
+            kind: "stat",
+            upgradeId: upgrade.id,
+            name: upgrade.name,
+            description: upgrade.description,
+            color: upgrade.tint,
+            price,
+            sold: false
+          });
+        }
+      }
+
+      shopChoices = choices;
+      hoveredShopIndex = -1;
+    }
+
+    function rerollShop() {
+      if (game.state !== "shop" || game.materials < CONFIG.shop.rerollCost) return false;
+      game.materials -= CONFIG.shop.rerollCost;
+      generateShopChoices();
+      sounds.purchase();
+      return true;
+    }
+
+    function buyShopItem(index) {
+      if (game.state !== "shop") return false;
+      const item = shopChoices[index];
+      if (!item || item.sold || game.materials < item.price) return false;
+
+      if (item.kind === "stat") {
+        const upgrade = UPGRADE_POOL.find((entry) => entry.id === item.upgradeId);
+        if (!upgrade) return false;
+        game.materials -= item.price;
+        upgrade.apply();
+        item.sold = true;
+        sounds.purchase();
+        return true;
+      }
+
+      if (weaponSlots.length >= CONFIG.shop.weaponSlotCount) {
+        pendingWeaponPurchase = { shopIndex: index, item };
+        game.state = "replace";
+        return false;
+      }
+
+      game.materials -= item.price;
+      weaponSlots.push({
+        type: item.weaponId,
+        cooldown: 0,
+        flash: 0
+      });
+      item.sold = true;
+      sounds.purchase();
+      return true;
+    }
+
+    function replaceWeaponSlot(slotIndex) {
+      if (
+        game.state !== "replace" ||
+        !pendingWeaponPurchase ||
+        slotIndex < 0 ||
+        slotIndex >= weaponSlots.length
+      ) {
+        return false;
+      }
+
+      const item = pendingWeaponPurchase.item;
+      if (game.materials < item.price) {
+        game.state = "shop";
+        pendingWeaponPurchase = null;
+        return false;
+      }
+
+      game.materials -= item.price;
+      weaponSlots[slotIndex] = {
+        type: item.weaponId,
+        cooldown: 0,
+        flash: 0
+      };
+      item.sold = true;
+      pendingWeaponPurchase = null;
+      game.state = "shop";
+      sounds.purchase();
+      return true;
+    }
+
+    function update(dt) {
+      game.shake = Math.max(0, game.shake - dt * 28);
+      game.waveBannerTime = Math.max(0, game.waveBannerTime - dt);
+      game.dodgeTextTime = Math.max(0, game.dodgeTextTime - dt);
+      game.critTextTime = Math.max(0, game.critTextTime - dt);
+      game.flashTime = Math.max(0, game.flashTime - dt);
+
+      if (game.state === "paused") return;
+
+      if (game.state !== "playing") {
+        updateParticles(dt);
+        updateFloatingTexts(dt);
+        return;
+      }
+
+      game.time += dt;
+      game.waveTime -= dt;
+      fireTimer -= dt;
+      spawnTimer -= dt;
+
+      if (spawnTimer <= 0) {
+        spawnEnemy();
+        spawnTimer = currentSpawnInterval();
+      }
+
+      updatePlayer(dt);
+      updateWeapons(dt);
+      updateEnemies(dt);
+      updateBullets(dt);
+      updateEnemyBullets(dt);
+      updateBeams(dt);
+      updateOrbs(dt);
+      updateMaterialDrops(dt);
+      updateParticles(dt);
+      updateFloatingTexts(dt);
+
+      if (game.waveTime <= 0) {
+        game.waveTime = 0;
+        finishWave();
+      }
+    }
+
+    function drawGrid() {
+      const gridSize = 40;
+      ctx.save();
+      ctx.strokeStyle = "rgba(92, 142, 194, 0.09)";
+      ctx.lineWidth = 1;
+
+      ctx.beginPath();
+      for (let x = 0; x <= CONFIG.worldWidth; x += gridSize) {
+        ctx.moveTo(x + 0.5, 0);
+        ctx.lineTo(x + 0.5, CONFIG.worldHeight);
+      }
+      for (let y = 0; y <= CONFIG.worldHeight; y += gridSize) {
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(CONFIG.worldWidth, y + 0.5);
+      }
+      ctx.stroke();
+
+      const gradient = ctx.createRadialGradient(
+        player.x,
+        player.y,
+        40,
+        player.x,
+        player.y,
+        430
+      );
+      gradient.addColorStop(0, "rgba(37, 91, 132, 0.08)");
+      gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.restore();
+    }
+
+    function drawAimGuide(target) {
+      if (!target) return;
+
+      const direction = normalize(target.x - player.x, target.y - player.y);
+      ctx.save();
+      ctx.strokeStyle = "rgba(117, 224, 255, 0.22)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 8]);
+      ctx.beginPath();
+      ctx.moveTo(
+        player.x + direction.x * (player.radius + 8),
+        player.y + direction.y * (player.radius + 8)
+      );
+      ctx.lineTo(target.x, target.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawBossEnemy(boss) {
+      const pulse = 1 + Math.sin(boss.phase) * 0.035;
+      const radius = boss.radius * pulse;
+      ctx.save();
+      ctx.translate(boss.x, boss.y);
+      ctx.shadowBlur = boss.bossMode === "telegraph" ? 32 : 20;
+      ctx.shadowColor = boss.bossMode === "telegraph" ? "#fff0bb" : "#ff5ca8";
+      ctx.fillStyle = boss.hitFlash > 0 ? "#fff5fb" : "#a83b8e";
+      ctx.beginPath();
+      for (let i = 0; i < 8; i += 1) {
+        const angle = boss.phase * 0.2 + i * Math.PI / 4;
+        const px = Math.cos(angle) * radius;
+        const py = Math.sin(angle) * radius;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "#ff9bd1";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = "#ffd6ed";
+      ctx.beginPath();
+      ctx.arc(-10, -12, 5, 0, Math.PI * 2);
+      ctx.arc(10, -12, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (boss.bossMode === "telegraph") {
+        ctx.strokeStyle = "rgba(255, 225, 151, 0.82)";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([7, 5]);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(
+          normalize(player.x - boss.x, player.y - boss.y).x * 260,
+          normalize(player.x - boss.x, player.y - boss.y).y * 260
+        );
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawEnemies() {
+      for (const enemy of enemies) {
+        if (!isVisible(enemy, 90)) continue;
+        if (enemy.type === "boss") {
+          drawBossEnemy(enemy);
+          continue;
+        }
+        const settings = CONFIG.enemies[enemy.type];
+        const pulse = 1 + Math.sin(enemy.phase) * 0.05;
+        const radius = enemy.radius * pulse;
+        const hpRatio = Math.max(0, enemy.hp / enemy.maxHp);
+
+        ctx.save();
+        ctx.shadowBlur = enemies.length > 120 ? 0 : enemy.hitFlash > 0 ? 22 : 12;
+        ctx.shadowColor = enemy.hitFlash > 0
+          ? "rgba(255,255,255,0.9)"
+          : settings.color;
+        ctx.fillStyle = enemy.hitFlash > 0 ? "#fff3f4" : settings.color;
+        ctx.beginPath();
+
+        if (enemy.type === "tank") {
+          ctx.roundRect(enemy.x - radius, enemy.y - radius, radius * 2, radius * 2, 7);
+          ctx.fill();
+        } else if (enemy.type === "shooter") {
+          ctx.moveTo(enemy.x, enemy.y - radius * 1.2);
+          ctx.lineTo(enemy.x + radius, enemy.y);
+          ctx.lineTo(enemy.x, enemy.y + radius * 1.2);
+          ctx.lineTo(enemy.x - radius, enemy.y);
+          ctx.closePath();
+          ctx.fill();
+        } else {
+          ctx.arc(enemy.x, enemy.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(255, 243, 249, 0.78)";
+        ctx.beginPath();
+        ctx.arc(enemy.x - radius * 0.28, enemy.y - radius * 0.3, radius * 0.22, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (enemy.type === "bomber") {
+          ctx.strokeStyle = enemy.bomberState === "fusing" ? "#fff0be" : "#ffc26f";
+          ctx.lineWidth = enemy.bomberState === "fusing" ? 3 : 1.5;
+          const blast = settings.explosionRadius *
+            (enemy.bomberState === "fusing" ? 1 - enemy.fuseTimer / settings.fuseTime : 0.18);
+          ctx.globalAlpha = enemy.bomberState === "fusing" ? 0.75 : 0.2;
+          ctx.beginPath();
+          ctx.arc(enemy.x, enemy.y, blast, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+
+        if (enemy.maxHp > 1.2) {
+          ctx.fillStyle = "rgba(25, 6, 10, 0.72)";
+          ctx.fillRect(enemy.x - radius, enemy.y - radius - 8, radius * 2, 3);
+          ctx.fillStyle = settings.color;
+          ctx.fillRect(enemy.x - radius, enemy.y - radius - 8, radius * 2 * hpRatio, 3);
+        }
+        ctx.restore();
+      }
+    }
+
+    function drawBullets() {
+      ctx.save();
+      ctx.shadowBlur = bullets.length > 220 ? 0 : 10;
+
+      for (const bullet of bullets) {
+        if (!isVisible(bullet, 24)) continue;
+        ctx.shadowColor = bullet.critical
+          ? "rgba(255, 95, 156, 0.95)"
+          : bullet.color;
+        ctx.fillStyle = bullet.critical ? "#ff72aa" : bullet.color;
+        ctx.beginPath();
+        ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = bullet.critical
+          ? "rgba(255, 126, 179, 0.35)"
+          : "rgba(255, 236, 147, 0.25)";
+        ctx.lineWidth = 3;
+        const direction = normalize(bullet.vx, bullet.vy);
+        ctx.beginPath();
+        ctx.moveTo(bullet.x, bullet.y);
+        ctx.lineTo(bullet.x - direction.x * 11, bullet.y - direction.y * 11);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawEnemyBullets() {
+      ctx.save();
+      for (const bullet of enemyBullets) {
+        if (!isVisible(bullet, 24)) continue;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "#ff6577";
+        ctx.fillStyle = "#ff8c99";
+        ctx.beginPath();
+        ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawBeams() {
+      ctx.save();
+      for (const beam of beams) {
+        ctx.globalAlpha = Math.max(0, beam.life / beam.maxLife);
+        ctx.strokeStyle = beam.color;
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = beam.color;
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(beam.x1, beam.y1);
+        ctx.lineTo(beam.x2, beam.y2);
+        ctx.stroke();
+        ctx.strokeStyle = "#fff1ff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawOrbs() {
+      for (const orb of orbs) {
+        if (!isVisible(orb, 20)) continue;
+        const pulse = 1 + Math.sin(orb.phase) * 0.18;
+        ctx.save();
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "#42ff90";
+        ctx.fillStyle = "#55f58f";
+        ctx.beginPath();
+        ctx.arc(orb.x, orb.y, orb.radius * pulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(228, 255, 238, 0.9)";
+        ctx.beginPath();
+        ctx.arc(orb.x - 1, orb.y - 1, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function drawMaterialDrops() {
+      for (const material of materialDrops) {
+        if (!isVisible(material, 20)) continue;
+        const pulse = 1 + Math.sin(material.phase) * 0.12;
+        const size = material.radius * 1.7 * pulse;
+        ctx.save();
+        ctx.translate(material.x, material.y);
+        ctx.rotate(material.phase * 0.34);
+        ctx.shadowBlur = 13;
+        ctx.shadowColor = "#ffcc4d";
+        ctx.fillStyle = "#ffd65a";
+        ctx.fillRect(-size / 2, -size / 2, size, size);
+        ctx.fillStyle = "#fff2ac";
+        ctx.fillRect(-size / 2 + 1.5, -size / 2 + 1.5, size * 0.34, size * 0.34);
+        ctx.restore();
+      }
+    }
+
+    function drawParticles() {
+      for (const particle of particles) {
+        if (!isVisible(particle, 8)) continue;
+        ctx.globalAlpha = Math.max(0, particle.life / particle.maxLife);
+        ctx.fillStyle = particle.color;
+        ctx.beginPath();
+        ctx.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawFloatingTexts() {
+      for (const text of floatingTexts) {
+        if (!isVisible({ x: text.x, y: text.y, radius: 30 }, 34)) continue;
+        const progress = 1 - text.life / text.maxLife;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - progress);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = text.color;
+        ctx.shadowBlur = text.critical ? 10 : 4;
+        ctx.shadowColor = text.critical ? "#ff4f9d" : "rgba(0,0,0,0.7)";
+        ctx.font = `800 ${text.fontSize}px Consolas, 'Courier New', monospace`;
+        ctx.fillText(text.value, text.x, text.y);
+        ctx.restore();
+      }
+    }
+
+    function drawPlayer() {
+      const aimDirection = normalize(mouse.x - player.x, mouse.y - player.y);
+      const pickupPulse = 1 + Math.sin(game.time * 3) * 0.03;
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(76, 231, 147, 0.13)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 6]);
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, stats.pickupRadius * pickupPulse, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      ctx.save();
+      if (player.hitFlash > 0) {
+        ctx.shadowBlur = 28;
+        ctx.shadowColor = "#ffffff";
+      } else if (player.dodgeFlash > 0) {
+        ctx.shadowBlur = 28;
+        ctx.shadowColor = "#a88aff";
+      } else {
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = "rgba(70, 170, 255, 0.75)";
+      }
+
+      ctx.fillStyle = player.hitFlash > 0
+        ? "#eaf8ff"
+        : player.dodgeFlash > 0
+          ? "#b8a9ff"
+          : "#3c9eff";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(204, 239, 255, 0.76)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius - 4, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = "#d8f5ff";
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(
+        player.x + aimDirection.x * (player.radius - 2),
+        player.y + aimDirection.y * (player.radius - 2)
+      );
+      ctx.lineTo(
+        player.x + aimDirection.x * (player.radius + 10),
+        player.y + aimDirection.y * (player.radius + 10)
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawWeaponSlots() {
+      const orbitRadius = 54;
+      for (let i = 0; i < CONFIG.shop.weaponSlotCount; i += 1) {
+        const angle = -Math.PI / 2 + i * (Math.PI * 2 / CONFIG.shop.weaponSlotCount);
+        const x = player.x + Math.cos(angle) * orbitRadius;
+        const y = player.y + Math.sin(angle) * orbitRadius;
+        const slot = weaponSlots[i];
+        const weapon = slot ? CONFIG.weapons[slot.type] : null;
+
+        ctx.save();
+        ctx.fillStyle = slot ? "rgba(8, 18, 29, 0.92)" : "rgba(8, 14, 22, 0.55)";
+        ctx.strokeStyle = weapon ? weapon.color : "rgba(123, 154, 176, 0.2)";
+        ctx.lineWidth = slot && slot.flash > 0 ? 2.5 : 1;
+        ctx.beginPath();
+        ctx.roundRect(x - 11, y - 7, 22, 14, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = weapon ? weapon.color : "rgba(120, 147, 166, 0.32)";
+        ctx.font = "800 8px Consolas, 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(slot ? weapon.shortName.slice(0, 2) : String(i + 1), x, y + 0.5);
+        ctx.restore();
+      }
+    }
+
+    function drawJoystick() {
+      if (!joystick.visible || game.state !== "playing") return;
+      ctx.save();
+      ctx.globalAlpha = joystick.active ? 0.72 : 0.34;
+      ctx.fillStyle = "rgba(7, 18, 28, 0.7)";
+      ctx.strokeStyle = "rgba(123, 213, 248, 0.76)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(joystick.baseX, joystick.baseY, 50, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.globalAlpha = joystick.active ? 0.88 : 0.48;
+      ctx.fillStyle = "rgba(87, 191, 238, 0.78)";
+      ctx.beginPath();
+      ctx.arc(joystick.knobX, joystick.knobY, 19, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#d8f7ff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawCrosshair() {
+      if (!mouse.inside || game.state === "levelup") return;
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(188, 240, 255, 0.74)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, 7, 0, Math.PI * 2);
+      ctx.moveTo(mouse.x - 11, mouse.y);
+      ctx.lineTo(mouse.x - 4, mouse.y);
+      ctx.moveTo(mouse.x + 4, mouse.y);
+      ctx.lineTo(mouse.x + 11, mouse.y);
+      ctx.moveTo(mouse.x, mouse.y - 11);
+      ctx.lineTo(mouse.x, mouse.y - 4);
+      ctx.moveTo(mouse.x, mouse.y + 4);
+      ctx.lineTo(mouse.x, mouse.y + 11);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawTopHud() {
+      const barX = 300;
+      const barWidth = 360;
+      const expRatio = game.xp / game.xpRequired;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.52)";
+      ctx.fillRect(barX, 18, barWidth, 14);
+      ctx.fillStyle = "#43dd8b";
+      ctx.fillRect(barX, 18, barWidth * expRatio, 14);
+      ctx.strokeStyle = "rgba(190, 244, 213, 0.3)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX + 0.5, 18.5, barWidth - 1, 13);
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ecfff4";
+      ctx.font = "700 12px Consolas, 'Courier New', monospace";
+      ctx.fillText(`等级 ${game.level}`, CONFIG.worldWidth / 2, 48);
+
+      ctx.fillStyle = "#f1f8ff";
+      ctx.font = "800 24px Consolas, 'Courier New', monospace";
+      ctx.fillText(`第 ${game.wave} 波`, CONFIG.worldWidth / 2, 79);
+
+      ctx.fillStyle = game.waveTime <= 5 ? "#ff6f7e" : "#b9d5e9";
+      ctx.font = "700 14px Consolas, 'Courier New', monospace";
+      ctx.fillText(
+        `倒计时 ${game.waveTime.toFixed(1)}s`,
+        CONFIG.worldWidth / 2,
+        101
+      );
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#ffd861";
+      ctx.font = "700 14px Consolas, 'Courier New', monospace";
+      ctx.fillText(`材料 ${game.materials}`, CONFIG.worldWidth - 24, 28);
+      if (game.pendingMaterials > 0) {
+        ctx.fillStyle = "rgba(255, 229, 146, 0.72)";
+        ctx.font = "11px Consolas, 'Courier New', monospace";
+        ctx.fillText(`待结算 +${game.pendingMaterials}`, CONFIG.worldWidth - 24, 50);
+      }
+
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(161, 195, 217, 0.72)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText(`${VERSION} · 最高波次 ${game.bestWave}`, 24, 28);
+      ctx.restore();
+    }
+
+    function drawBossHealth() {
+      if (!game.bossActive) return;
+      const boss = enemies.find((enemy) => enemy.type === "boss");
+      if (!boss) return;
+
+      const width = 520;
+      const x = (CONFIG.worldWidth - width) / 2;
+      const y = 132;
+      const ratio = Math.max(0, boss.hp / boss.maxHp);
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffc7e5";
+      ctx.font = "700 12px Consolas, 'Courier New', monospace";
+      ctx.fillText(game.bossName, CONFIG.worldWidth / 2, y - 8);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(x, y, width, 12);
+      ctx.fillStyle = "#e84e9e";
+      ctx.fillRect(x, y, width * ratio, 12);
+      ctx.strokeStyle = "rgba(255, 186, 222, 0.5)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, width - 1, 11);
+      ctx.restore();
+    }
+
+    function drawHealthHud() {
+      const x = 24;
+      const y = CONFIG.worldHeight - 66;
+      const width = 245;
+      const height = 18;
+      const hpRatio = player.hp / stats.maxHp;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.58)";
+      ctx.fillRect(x, y, width, height);
+      ctx.fillStyle = hpRatio > 0.3 ? "#39d59c" : "#ff5668";
+      ctx.fillRect(x, y, width * hpRatio, height);
+      ctx.strokeStyle = "rgba(214, 244, 255, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#eaf8ff";
+      ctx.font = "12px Consolas, 'Courier New', monospace";
+      ctx.fillText(`生命 ${Math.ceil(player.hp)} / ${stats.maxHp}`, x + 8, y + 9);
+
+      ctx.fillStyle = "rgba(203, 226, 242, 0.75)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText(
+        statsPinned ? "属性面板已固定 · 按 Tab 收起" : "悬停此处或按 Tab 查看属性",
+        x,
+        y - 10
+      );
+
+      const dashReady = player.dashCooldown <= 0;
+      ctx.fillStyle = dashReady ? "#a9f3ff" : "rgba(141, 166, 181, 0.7)";
+      ctx.font = "10px Consolas, 'Courier New', monospace";
+      ctx.fillText(
+        dashReady ? "冲刺就绪 · 空格 / Shift" : `冲刺冷却 ${player.dashCooldown.toFixed(1)}s`,
+        x + width + 16,
+        y + 9
+      );
+      ctx.restore();
+    }
+
+    function shouldShowStatsPanel() {
+      if (game.state !== "playing") return false;
+
+      const hovered =
+        mouse.inside &&
+        mouse.x >= 18 &&
+        mouse.x <= 330 &&
+        mouse.y >= CONFIG.worldHeight - 150 &&
+        mouse.y <= CONFIG.worldHeight - 34;
+      return statsPinned || hovered || game.state === "levelup";
+    }
+
+    function drawStatsPanel() {
+      if (!shouldShowStatsPanel()) return;
+
+      const x = 22;
+      const y = 171;
+      const width = 284;
+      const height = 297;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(4, 11, 19, 0.92)";
+      ctx.strokeStyle = "rgba(98, 164, 211, 0.26)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, 12);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#dff1ff";
+      ctx.font = "700 15px Consolas, 'Courier New', monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText("角色属性", x + 16, y + 24);
+
+      ctx.textAlign = "right";
+      ctx.font = "10px Consolas, 'Courier New', monospace";
+      ctx.fillStyle = "rgba(151, 190, 218, 0.7)";
+      ctx.fillText(statsPinned ? "PINNED" : "TAB", x + width - 16, y + 24);
+
+      const armorReduction = 1 - CONFIG.player.armorScale / (CONFIG.player.armorScale + stats.armor);
+      const rows = [
+        ["最大生命", `${stats.maxHp.toFixed(0)}`],
+        ["伤害", `${stats.damage.toFixed(2)}`],
+        ["攻速", `${stats.attackSpeed.toFixed(2)}×`],
+        ["暴击率", `${(stats.critChance * 100).toFixed(0)}%`],
+        ["暴击伤害", `${stats.critMult.toFixed(1)}×`],
+        ["闪避率", `${(stats.dodge * 100).toFixed(0)}%`],
+        ["护甲", `${stats.armor}  (${(armorReduction * 100).toFixed(0)}%减伤)`],
+        ["移速", `${(stats.moveSpeed / CONFIG.player.baseSpeed * 100).toFixed(0)}%`],
+        ["拾取范围", `${stats.pickupRadius.toFixed(0)}`],
+        ["幸运", `${(stats.luck * 100).toFixed(0)}%`]
+      ];
+
+      ctx.font = "12px Consolas, 'Courier New', monospace";
+      rows.forEach(([label, value], index) => {
+        const rowY = y + 57 + index * 23;
+        ctx.textAlign = "left";
+        ctx.fillStyle = "rgba(159, 191, 214, 0.76)";
+        ctx.fillText(label, x + 17, rowY);
+        ctx.textAlign = "right";
+        ctx.fillStyle = index === 6 ? "#ffd27b" : "#f2f8fc";
+        ctx.fillText(value, x + width - 17, rowY);
+      });
+      ctx.restore();
+    }
+
+    function drawWaveBanner() {
+      if (game.waveBannerTime <= 0 || game.state !== "playing") return;
+      const alpha = Math.min(1, game.waveBannerTime * 1.8);
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(3, 9, 15, 0.72)";
+      ctx.fillRect(0, 201, CONFIG.worldWidth, 95);
+      ctx.fillStyle = "#dff5ff";
+      ctx.shadowBlur = 20;
+      ctx.shadowColor = "rgba(91, 202, 255, 0.45)";
+      ctx.font = "800 34px Consolas, 'Courier New', monospace";
+      ctx.fillText(`第 ${game.wave} 波`, CONFIG.worldWidth / 2, 236);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(180, 215, 235, 0.78)";
+      ctx.font = "13px Consolas, 'Courier New', monospace";
+      ctx.fillText("20 秒生存 · 汲取经验 · 完成进化", CONFIG.worldWidth / 2, 271);
+      ctx.restore();
+    }
+
+    function drawWaveEnd() {
+      if (game.state !== "waveEnd") return;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 9, 14, 0.48)";
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.shadowBlur = 22;
+      ctx.shadowColor = "rgba(74, 239, 149, 0.45)";
+      ctx.fillStyle = "#aaffd0";
+      ctx.font = "800 38px Consolas, 'Courier New', monospace";
+      ctx.fillText(`第 ${game.wave} 波结束`, CONFIG.worldWidth / 2, 243);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#e1f5ec";
+      ctx.font = "14px Consolas, 'Courier New', monospace";
+      ctx.fillText("已清场 · 生命恢复 20%", CONFIG.worldWidth / 2, 292);
+      ctx.fillStyle = "rgba(164, 205, 189, 0.72)";
+      ctx.font = "12px Consolas, 'Courier New', monospace";
+      ctx.fillText(`下一波 ${Math.max(0, game.intermissionTime).toFixed(1)}s`, CONFIG.worldWidth / 2, 329);
+      ctx.restore();
+    }
+
+    function drawShop() {
+      if (game.state !== "shop") return;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 7, 12, 0.92)";
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#f1f8ff";
+      ctx.font = "800 30px Consolas, 'Courier New', monospace";
+      ctx.fillText(`第 ${game.shopWave} 波商栈`, CONFIG.worldWidth / 2, 48);
+      ctx.fillStyle = "#ffd861";
+      ctx.font = "700 15px Consolas, 'Courier New', monospace";
+      ctx.fillText(`可用材料 ${game.materials}`, CONFIG.worldWidth / 2, 80);
+
+      const cardWidth = 190;
+      const cardHeight = 260;
+      const gap = 16;
+      const startX = (CONFIG.worldWidth - (cardWidth * 4 + gap * 3)) / 2;
+      const cardY = 111;
+      shopCardRects = [];
+
+      shopChoices.forEach((item, index) => {
+        const x = startX + index * (cardWidth + gap);
+        const rect = { x, y: cardY, width: cardWidth, height: cardHeight };
+        shopCardRects.push(rect);
+        const hovered = hoveredShopIndex === index && !item.sold;
+        const affordable = game.materials >= item.price;
+
+        ctx.save();
+        ctx.fillStyle = item.sold
+          ? "rgba(19, 28, 35, 0.72)"
+          : hovered
+            ? "rgba(18, 35, 49, 0.98)"
+            : "rgba(8, 19, 29, 0.96)";
+        ctx.strokeStyle = item.sold
+          ? "rgba(105, 128, 141, 0.18)"
+          : hovered
+            ? item.color
+            : "rgba(119, 163, 192, 0.3)";
+        ctx.lineWidth = hovered ? 2 : 1;
+        ctx.beginPath();
+        ctx.roundRect(x, cardY, cardWidth, cardHeight, 14);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = item.sold ? "rgba(110, 130, 142, 0.22)" : `${item.color}22`;
+        ctx.beginPath();
+        ctx.roundRect(x + 11, cardY + 11, cardWidth - 22, 74, 10);
+        ctx.fill();
+
+        ctx.fillStyle = item.sold ? "rgba(153, 169, 178, 0.4)" : item.color;
+        ctx.font = "800 12px Consolas, 'Courier New', monospace";
+        ctx.fillText(item.kind === "weapon" ? "WEAPON / 武器" : "MODULE / 属性", x + cardWidth / 2, cardY + 37);
+        ctx.font = "800 28px Consolas, 'Courier New', monospace";
+        ctx.fillText(String(index + 1), x + cardWidth / 2, cardY + 67);
+
+        ctx.fillStyle = item.sold ? "rgba(159, 174, 183, 0.5)" : "#f5fbff";
+        ctx.font = "700 18px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+        ctx.fillText(item.sold ? "已售出" : item.name, x + cardWidth / 2, cardY + 118);
+
+        ctx.fillStyle = item.sold ? "rgba(128, 145, 155, 0.45)" : "rgba(186, 215, 231, 0.8)";
+        ctx.font = "12px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+        const lines = item.description.split(" · ");
+        lines.forEach((line, lineIndex) => {
+          ctx.fillText(line, x + cardWidth / 2, cardY + 153 + lineIndex * 22);
+        });
+
+        ctx.fillStyle = item.sold
+          ? "rgba(120, 140, 150, 0.4)"
+          : affordable
+            ? "#ffd861"
+            : "#ff7484";
+        ctx.font = "800 15px Consolas, 'Courier New', monospace";
+        ctx.fillText(`◆ ${item.price}`, x + cardWidth / 2, cardY + 222);
+        ctx.restore();
+      });
+
+      const rerollWidth = 178;
+      const nextWidth = 178;
+      const buttonY = 411;
+      const buttonHeight = 48;
+      const buttonsStart = (CONFIG.worldWidth - rerollWidth - nextWidth - 24) / 2;
+      shopActionRects = [
+        { name: "reroll", x: buttonsStart, y: buttonY, width: rerollWidth, height: buttonHeight },
+        { name: "next", x: buttonsStart + rerollWidth + 24, y: buttonY, width: nextWidth, height: buttonHeight }
+      ];
+
+      for (const rect of shopActionRects) {
+        const enabled = rect.name === "next" || game.materials >= CONFIG.shop.rerollCost;
+        ctx.fillStyle = enabled ? "rgba(29, 50, 65, 0.95)" : "rgba(20, 29, 35, 0.62)";
+        ctx.strokeStyle = enabled
+          ? rect.name === "next" ? "rgba(91, 235, 157, 0.65)" : "rgba(255, 201, 87, 0.55)"
+          : "rgba(106, 129, 141, 0.18)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(rect.x, rect.y, rect.width, rect.height, 10);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = enabled ? "#eaf8ff" : "rgba(143, 158, 167, 0.45)";
+        ctx.font = "700 14px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+        ctx.fillText(
+          rect.name === "next"
+            ? game.wave >= CONFIG.waves.total ? "完成挑战" : "下一波"
+            : `重掷  ◆${CONFIG.shop.rerollCost}`,
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2
+        );
+      }
+
+      ctx.fillStyle = "rgba(151, 184, 203, 0.66)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText("点击商品购买 · R 重掷 · N 下一波", CONFIG.worldWidth / 2, 494);
+      ctx.restore();
+    }
+
+    function drawReplacePrompt() {
+      if (game.state !== "replace" || !pendingWeaponPurchase) return;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 6, 11, 0.94)";
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#f2f9ff";
+      ctx.font = "800 28px Consolas, 'Courier New', monospace";
+      ctx.fillText("武器槽已满", CONFIG.worldWidth / 2, 55);
+      ctx.fillStyle = "rgba(176, 209, 228, 0.8)";
+      ctx.font = "13px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+      ctx.fillText(
+        `购买 ${pendingWeaponPurchase.item.name}，请选择要替换的武器`,
+        CONFIG.worldWidth / 2,
+        88
+      );
+
+      const cardWidth = 133;
+      const cardHeight = 208;
+      const gap = 11;
+      const totalWidth = cardWidth * 6 + gap * 5;
+      const startX = (CONFIG.worldWidth - totalWidth) / 2;
+      const cardY = 137;
+      replaceRects = [];
+
+      weaponSlots.forEach((slot, index) => {
+        const weapon = CONFIG.weapons[slot.type];
+        const x = startX + index * (cardWidth + gap);
+        replaceRects.push({ x, y: cardY, width: cardWidth, height: cardHeight });
+        ctx.save();
+        ctx.fillStyle = "rgba(10, 23, 34, 0.96)";
+        ctx.strokeStyle = weapon.color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x, cardY, cardWidth, cardHeight, 12);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = weapon.color;
+        ctx.font = "800 28px Consolas, 'Courier New', monospace";
+        ctx.fillText(String(index + 1), x + cardWidth / 2, cardY + 45);
+        ctx.fillStyle = "#f3faff";
+        ctx.font = "700 17px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+        ctx.fillText(weapon.name, x + cardWidth / 2, cardY + 101);
+        ctx.fillStyle = "rgba(173, 204, 222, 0.76)";
+        ctx.font = "11px Consolas, 'Courier New', monospace";
+        ctx.fillText(`冷却 ${weapon.cooldown.toFixed(2)}s`, x + cardWidth / 2, cardY + 137);
+        ctx.fillText(`伤害 ${weapon.damage.toFixed(2)}`, x + cardWidth / 2, cardY + 159);
+        ctx.fillStyle = "rgba(170, 193, 207, 0.58)";
+        ctx.fillText(`按 ${index + 1} 替换`, x + cardWidth / 2, cardY + 187);
+        ctx.restore();
+      });
+
+      ctx.fillStyle = "rgba(157, 185, 201, 0.66)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText("Esc 取消 · 购买费用仅在选择替换后扣除", CONFIG.worldWidth / 2, 394);
+      ctx.restore();
+    }
+
+    function drawUpgradeCards() {
+      if (game.state !== "levelup") return;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 6, 11, 0.78)";
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#e8f7ff";
+      ctx.font = "800 28px Consolas, 'Courier New', monospace";
+      ctx.fillText("等级提升", CONFIG.worldWidth / 2, 66);
+      ctx.fillStyle = "rgba(159, 197, 219, 0.8)";
+      ctx.font = "12px Consolas, 'Courier New', monospace";
+      ctx.fillText("选择一项强化 · 点击卡片或按 1 / 2 / 3", CONFIG.worldWidth / 2, 96);
+
+      const cardWidth = 250;
+      const cardHeight = 286;
+      const gap = 26;
+      const totalWidth = cardWidth * 3 + gap * 2;
+      const startX = (CONFIG.worldWidth - totalWidth) / 2;
+      const cardY = 137;
+      upgradeCardRects = [];
+
+      upgradeChoices.forEach((choice, index) => {
+        const x = startX + index * (cardWidth + gap);
+        const rect = { x, y: cardY, width: cardWidth, height: cardHeight };
+        upgradeCardRects.push(rect);
+        const hovered = hoveredCard === index;
+
+        ctx.save();
+        ctx.shadowBlur = hovered ? 28 : 12;
+        ctx.shadowColor = choice.tint;
+        ctx.fillStyle = hovered ? "rgba(19, 35, 49, 0.98)" : "rgba(9, 20, 31, 0.96)";
+        ctx.strokeStyle = hovered ? choice.tint : "rgba(126, 171, 201, 0.32)";
+        ctx.lineWidth = hovered ? 2 : 1;
+        ctx.beginPath();
+        ctx.roundRect(x, cardY, cardWidth, cardHeight, 16);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(255, 255, 255, 0.035)";
+        ctx.beginPath();
+        ctx.roundRect(x + 12, cardY + 12, cardWidth - 24, 104, 12);
+        ctx.fill();
+
+        ctx.fillStyle = choice.tint;
+        ctx.font = "800 50px Consolas, 'Courier New', monospace";
+        ctx.fillText(String(index + 1), x + cardWidth / 2, cardY + 66);
+        ctx.font = "11px Consolas, 'Courier New', monospace";
+        ctx.fillStyle = "rgba(205, 229, 241, 0.65)";
+        ctx.fillText(choice.tag, x + cardWidth / 2, cardY + 103);
+
+        ctx.fillStyle = "#f5fbff";
+        ctx.font = "700 20px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+        ctx.fillText(choice.name, x + cardWidth / 2, cardY + 153);
+
+        ctx.fillStyle = "rgba(192, 220, 235, 0.82)";
+        ctx.font = "14px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+        const descriptionLines = choice.description.split("，");
+        descriptionLines.forEach((line, lineIndex) => {
+          ctx.fillText(line, x + cardWidth / 2, cardY + 191 + lineIndex * 26);
+        });
+
+        ctx.fillStyle = hovered ? choice.tint : "rgba(147, 182, 201, 0.72)";
+        ctx.font = "11px Consolas, 'Courier New', monospace";
+        ctx.fillText("PRESS " + (index + 1), x + cardWidth / 2, cardY + 258);
+        ctx.restore();
+      });
+
+      ctx.restore();
+    }
+
+    function drawEndScreen() {
+      if (game.state !== "gameover" && game.state !== "victory") return;
+
+      const victory = game.state === "victory";
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 6, 12, 0.78)";
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.shadowBlur = 24;
+      ctx.shadowColor = victory ? "rgba(78, 238, 152, 0.5)" : "rgba(255, 73, 93, 0.48)";
+      ctx.fillStyle = victory ? "#72f7ad" : "#ff6478";
+      ctx.font = "800 46px Consolas, 'Courier New', monospace";
+      ctx.fillText(victory ? "二十波完成" : "游戏结束", CONFIG.worldWidth / 2, 208);
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#dceeff";
+      ctx.font = "15px Consolas, 'Courier New', monospace";
+      ctx.fillText(
+        `到达第 ${game.wave} 波  ·  等级 ${game.level}  ·  击杀 ${game.kills}`,
+        CONFIG.worldWidth / 2,
+        266
+      );
+      ctx.fillStyle = "rgba(184, 215, 236, 0.8)";
+      ctx.fillText(`造成总伤害 ${game.totalDamage.toFixed(0)}`, CONFIG.worldWidth / 2, 296);
+      ctx.fillStyle = "rgba(210, 236, 250, 0.9)";
+      ctx.font = "15px Consolas, 'Courier New', monospace";
+      ctx.fillText("按 R 重新开始", CONFIG.worldWidth / 2, 346);
+      ctx.restore();
+    }
+
+    function drawPauseScreen() {
+      if (game.state !== "paused") return;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 7, 12, 0.9)";
+      ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#e9f7ff";
+      ctx.font = "800 34px Consolas, 'Courier New', monospace";
+      ctx.fillText("游戏暂停", CONFIG.worldWidth / 2, 62);
+      ctx.fillStyle = "rgba(164, 200, 221, 0.76)";
+      ctx.font = "12px Consolas, 'Courier New', monospace";
+      ctx.fillText("按 Esc 继续", CONFIG.worldWidth / 2, 94);
+
+      const left = 210;
+      const top = 135;
+      const rowGap = 31;
+      const armorReduction = 1 - CONFIG.player.armorScale / (CONFIG.player.armorScale + stats.armor);
+      const rows = [
+        ["最大生命", `${stats.maxHp.toFixed(0)}`],
+        ["当前生命", `${Math.ceil(player.hp)}`],
+        ["伤害倍率", `${stats.damage.toFixed(2)}`],
+        ["攻击速度", `${stats.attackSpeed.toFixed(2)}×`],
+        ["移动速度", `${stats.moveSpeed.toFixed(0)}`],
+        ["暴击率", `${(stats.critChance * 100).toFixed(0)}%`],
+        ["暴击伤害", `${stats.critMult.toFixed(1)}×`],
+        ["闪避率", `${(stats.dodge * 100).toFixed(0)}%`],
+        ["护甲减伤", `${(armorReduction * 100).toFixed(0)}%`],
+        ["拾取范围", `${stats.pickupRadius.toFixed(0)}`],
+        ["幸运", `${(stats.luck * 100).toFixed(0)}%`],
+        ["武器数量", `${weaponSlots.length} / ${CONFIG.shop.weaponSlotCount}`]
+      ];
+
+      rows.forEach(([label, value], index) => {
+        const column = index >= 6 ? 1 : 0;
+        const row = index % 6;
+        const x = left + column * 310;
+        const y = top + row * rowGap;
+        ctx.textAlign = "left";
+        ctx.fillStyle = "rgba(154, 190, 211, 0.76)";
+        ctx.font = "13px Consolas, 'Courier New', monospace";
+        ctx.fillText(label, x, y);
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#f1f9ff";
+        ctx.fillText(value, x + 240, y);
+      });
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(151, 183, 201, 0.6)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText("WASD 移动 · 自动攻击 · 空格/Shift 冲刺 · Tab 属性", CONFIG.worldWidth / 2, 382);
+      ctx.restore();
+    }
+
+    function drawDebugPanel() {
+      if (!debugPanelOpen) return;
+
+      const x = 105;
+      const y = 72;
+      const width = 750;
+      const height = 396;
+      ctx.save();
+      ctx.fillStyle = "rgba(2, 7, 12, 0.96)";
+      ctx.strokeStyle = "rgba(87, 225, 255, 0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#dff8ff";
+      ctx.font = "800 24px Consolas, 'Courier New', monospace";
+      ctx.fillText("F1 隐藏测试面板", x + 24, y + 32);
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(147, 189, 208, 0.7)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText("再次按 F1 关闭", x + width - 24, y + 32);
+
+      const metrics = [
+        ["当前波次", String(game.wave)],
+        ["同屏敌人", String(enemies.length)],
+        ["活动子弹", String(bullets.length + enemyBullets.length)],
+        ["粒子", String(particles.length)],
+        ["FPS", measuredFps.toFixed(1)]
+      ];
+      metrics.forEach(([label, value], index) => {
+        const mx = x + 24 + index * 139;
+        ctx.textAlign = "left";
+        ctx.fillStyle = "rgba(142, 181, 200, 0.7)";
+        ctx.font = "10px Consolas, 'Courier New', monospace";
+        ctx.fillText(label, mx, y + 74);
+        ctx.fillStyle = index === 4 ? "#74f0b2" : "#edf9ff";
+        ctx.font = "800 18px Consolas, 'Courier New', monospace";
+        ctx.fillText(value, mx, y + 98);
+      });
+
+      debugToggleRect = { x: x + 24, y: y + 124, width: 156, height: 38 };
+      ctx.fillStyle = debugInvincible
+        ? "rgba(44, 122, 87, 0.9)"
+        : "rgba(24, 42, 55, 0.95)";
+      ctx.strokeStyle = debugInvincible
+        ? "#65efaa"
+        : "rgba(118, 157, 178, 0.38)";
+      ctx.beginPath();
+      ctx.roundRect(
+        debugToggleRect.x,
+        debugToggleRect.y,
+        debugToggleRect.width,
+        debugToggleRect.height,
+        8
+      );
+      ctx.fill();
+      ctx.stroke();
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#effcff";
+      ctx.font = "700 12px 'Microsoft YaHei UI', 'PingFang SC', sans-serif";
+      ctx.fillText(
+        debugInvincible ? "无敌：开启" : "无敌：关闭",
+        debugToggleRect.x + debugToggleRect.width / 2,
+        debugToggleRect.y + debugToggleRect.height / 2
+      );
+
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(160, 198, 217, 0.72)";
+      ctx.font = "11px Consolas, 'Courier New', monospace";
+      ctx.fillText("跳转波次", x + 24, y + 187);
+
+      debugJumpRects = [];
+      const buttonWidth = 53;
+      const buttonHeight = 38;
+      const gap = 12;
+      const gridX = x + 24;
+      const gridY = y + 208;
+      for (let i = 0; i < CONFIG.waves.total; i += 1) {
+        const column = i % 10;
+        const row = Math.floor(i / 10);
+        const bx = gridX + column * (buttonWidth + gap);
+        const by = gridY + row * (buttonHeight + 14);
+        debugJumpRects.push({
+          wave: i + 1,
+          x: bx,
+          y: by,
+          width: buttonWidth,
+          height: buttonHeight
+        });
+        ctx.fillStyle = game.wave === i + 1
+          ? "rgba(54, 171, 217, 0.9)"
+          : "rgba(20, 43, 58, 0.92)";
+        ctx.strokeStyle = game.wave === i + 1
+          ? "#9beeff"
+          : "rgba(116, 158, 180, 0.32)";
+        ctx.beginPath();
+        ctx.roundRect(bx, by, buttonWidth, buttonHeight, 7);
+        ctx.fill();
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f0fbff";
+        ctx.font = "700 12px Consolas, 'Courier New', monospace";
+        ctx.fillText(String(i + 1), bx + buttonWidth / 2, by + buttonHeight / 2);
+      }
+
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(139, 174, 193, 0.66)";
+      ctx.font = "10px Consolas, 'Courier New', monospace";
+      ctx.fillText("跳转用于测试波次和 Boss；最高波次会同步记录。", x + 24, y + 357);
+      ctx.restore();
+    }
+
+    function drawDodgeAndCritText() {
+      if (game.dodgeTextTime > 0) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, game.dodgeTextTime * 2);
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#c6b5ff";
+        ctx.font = "800 15px Consolas, 'Courier New', monospace";
+        ctx.fillText("闪避", player.x, player.y - 32);
+        ctx.restore();
+      }
+
+      if (game.critTextTime > 0) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, game.critTextTime * 2.4);
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ff82b5";
+        ctx.font = "800 13px Consolas, 'Courier New', monospace";
+        ctx.fillText("暴击!", player.x, player.y + 37);
+        ctx.restore();
+      }
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      ctx.save();
+
+      if (game.shake > 0) {
+        const strength = game.shake * 0.35;
+        ctx.translate(
+          (Math.random() * 2 - 1) * strength,
+          (Math.random() * 2 - 1) * strength
+        );
+      }
+
+      drawGrid();
+      drawParticles();
+      drawAimGuide(findNearestEnemy());
+      drawOrbs();
+      drawMaterialDrops();
+      drawEnemies();
+      drawBullets();
+      drawEnemyBullets();
+      drawBeams();
+      drawPlayer();
+      drawWeaponSlots();
+      drawJoystick();
+      drawCrosshair();
+      drawDodgeAndCritText();
+      drawFloatingTexts();
+      ctx.restore();
+
+      if (game.flashTime > 0) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.32 * Math.min(1, game.flashTime / CONFIG.effects.hitFlashDuration)})`;
+        ctx.fillRect(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
+      }
+
+      if (game.state === "playing") {
+        drawTopHud();
+        drawHealthHud();
+        drawStatsPanel();
+        drawBossHealth();
+      }
+      drawWaveBanner();
+      drawUpgradeCards();
+      drawShop();
+      drawReplacePrompt();
+      drawPauseScreen();
+      drawEndScreen();
+      drawDebugPanel();
+    }
+
+    function gameLoop(now) {
+      const rawFrameTime = Math.max(0, (now - lastFrameTime) / 1000);
+      const frameTime = Math.min(rawFrameTime, 0.05);
+      lastFrameTime = now;
+      elapsedSinceUpdate += frameTime;
+      fpsAccumulator += rawFrameTime;
+      fpsFrameCount += 1;
+      if (fpsAccumulator >= 0.3) {
+        measuredFps = fpsFrameCount / fpsAccumulator;
+        fpsAccumulator = 0;
+        fpsFrameCount = 0;
+      }
+
+      while (elapsedSinceUpdate >= CONFIG.fixedStep) {
+        update(CONFIG.fixedStep);
+        elapsedSinceUpdate -= CONFIG.fixedStep;
+      }
+
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function handleCardPointerMove(position) {
+      hoveredCard = -1;
+      for (let i = 0; i < upgradeCardRects.length; i += 1) {
+        const rect = upgradeCardRects[i];
+        if (
+          position.x >= rect.x &&
+          position.x <= rect.x + rect.width &&
+          position.y >= rect.y &&
+          position.y <= rect.y + rect.height
+        ) {
+          hoveredCard = i;
+          break;
+        }
+      }
+    }
+
+    function pointInsideRect(point, rect) {
+      return (
+        point.x >= rect.x &&
+        point.x <= rect.x + rect.width &&
+        point.y >= rect.y &&
+        point.y <= rect.y + rect.height
+      );
+    }
+
+    function handleShopPointerMove(position) {
+      hoveredShopIndex = -1;
+      for (let i = 0; i < shopCardRects.length; i += 1) {
+        if (pointInsideRect(position, shopCardRects[i])) {
+          hoveredShopIndex = i;
+          break;
+        }
+      }
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (
+        [
+          "KeyW",
+          "KeyA",
+          "KeyS",
+          "KeyD",
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "Space",
+          "ShiftLeft",
+          "ShiftRight",
+          "Tab",
+          "Escape",
+          "F1",
+          "KeyF1"
+        ].includes(event.code)
+      ) {
+        event.preventDefault();
+      }
+
+      ensureAudio();
+      keys.add(event.code);
+
+      if (event.code === "F1" || event.code === "KeyF1") {
+        event.preventDefault();
+        if (!event.repeat) debugPanelOpen = !debugPanelOpen;
+        return;
+      }
+
+      if (event.code === "Escape" && !event.repeat) {
+        if (game.state === "playing") {
+          game.state = "paused";
+          keys.clear();
+        } else if (game.state === "paused") {
+          game.state = "playing";
+          lastFrameTime = performance.now();
+          elapsedSinceUpdate = 0;
+        }
+        return;
+      }
+
+      if (
+        game.state === "playing" &&
+        !event.repeat &&
+        (event.code === "Space" || event.code === "ShiftLeft" || event.code === "ShiftRight")
+      ) {
+        startDash();
+        return;
+      }
+
+      if (event.code === "Tab" && !event.repeat) {
+        statsPinned = !statsPinned;
+        return;
+      }
+
+      if (game.state === "levelup") {
+        if (event.code === "Digit1" || event.code === "Numpad1") selectUpgrade(0);
+        if (event.code === "Digit2" || event.code === "Numpad2") selectUpgrade(1);
+        if (event.code === "Digit3" || event.code === "Numpad3") selectUpgrade(2);
+        return;
+      }
+
+      if (game.state === "shop") {
+        if (!event.repeat && event.code.startsWith("Digit")) {
+          const index = Number(event.code.slice(5)) - 1;
+          if (index >= 0 && index < 4) buyShopItem(index);
+        }
+        if (!event.repeat && event.code === "KeyR") rerollShop();
+        if (!event.repeat && event.code === "KeyN") startNextWave();
+        return;
+      }
+
+      if (game.state === "replace") {
+        if (event.code === "Escape") {
+          game.state = "shop";
+          pendingWeaponPurchase = null;
+        }
+        if (!event.repeat && event.code.startsWith("Digit")) {
+          replaceWeaponSlot(Number(event.code.slice(5)) - 1);
+        }
+        return;
+      }
+
+      if (event.code === "KeyR" && (game.state === "gameover" || game.state === "victory")) {
+        resetGame();
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      keys.delete(event.code);
+    });
+
+    window.addEventListener("blur", () => {
+      keys.clear();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && game.state === "playing") {
+        game.state = "paused";
+      }
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      const position = getPointerPosition(event);
+      if (joystick.active && event.pointerId === joystick.pointerId) {
+        updateJoystick(position);
+        return;
+      }
+      mouse.x = position.x;
+      mouse.y = position.y;
+      mouse.inside = true;
+      handleCardPointerMove(position);
+      handleShopPointerMove(position);
+    });
+
+    canvas.addEventListener("pointerenter", () => {
+      mouse.inside = true;
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+      mouse.inside = false;
+      hoveredCard = -1;
+      hoveredShopIndex = -1;
+    });
+
+    canvas.addEventListener("pointerdown", (event) => {
+      ensureAudio();
+      const position = getPointerPosition(event);
+
+      if (debugPanelOpen) {
+        if (debugToggleRect && pointInsideRect(position, debugToggleRect)) {
+          debugInvincible = !debugInvincible;
+          return;
+        }
+        for (const rect of debugJumpRects) {
+          if (pointInsideRect(position, rect)) {
+            jumpToWave(rect.wave);
+            return;
+          }
+        }
+      }
+
+      if (event.pointerType === "touch" && game.state === "playing") {
+        joystick.visible = true;
+        const joystickZone =
+          position.x < 190 &&
+          position.y > CONFIG.worldHeight - 190 &&
+          Math.hypot(position.x - joystick.baseX, position.y - joystick.baseY) < 72;
+        if (joystickZone) {
+          joystick.active = true;
+          joystick.pointerId = event.pointerId;
+          canvas.setPointerCapture?.(event.pointerId);
+          updateJoystick(position);
+        } else {
+          tapFire();
+        }
+        return;
+      }
+
+      if (game.state === "levelup") {
+        for (let i = 0; i < upgradeCardRects.length; i += 1) {
+          if (pointInsideRect(position, upgradeCardRects[i])) {
+            selectUpgrade(i);
+            break;
+          }
+        }
+        return;
+      }
+
+      if (game.state === "shop") {
+        for (let i = 0; i < shopCardRects.length; i += 1) {
+          if (pointInsideRect(position, shopCardRects[i])) {
+            buyShopItem(i);
+            return;
+          }
+        }
+        for (const action of shopActionRects) {
+          if (pointInsideRect(position, action)) {
+            if (action.name === "reroll") rerollShop();
+            if (action.name === "next") startNextWave();
+            return;
+          }
+        }
+        return;
+      }
+
+      if (game.state === "replace") {
+        for (let i = 0; i < replaceRects.length; i += 1) {
+          if (pointInsideRect(position, replaceRects[i])) {
+            replaceWeaponSlot(i);
+            return;
+          }
+        }
+      }
+    });
+
+    function releaseJoystick(event) {
+      if (!joystick.active) return;
+      if (event.pointerId !== joystick.pointerId) return;
+      joystick.active = false;
+      joystick.pointerId = null;
+      joystick.dx = 0;
+      joystick.dy = 0;
+      joystick.knobX = joystick.baseX;
+      joystick.knobY = joystick.baseY;
+    }
+
+    canvas.addEventListener("pointerup", releaseJoystick);
+    canvas.addEventListener("pointercancel", releaseJoystick);
+
+    canvas.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+    });
+
+    resetGame();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
