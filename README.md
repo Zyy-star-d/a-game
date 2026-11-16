@@ -1,3 +1,5 @@
+[🎮 点击在线试玩](https://zzy-star-d.github.io/a-game/)
+[🎮 点击在线试玩](https://zzy-star-d.github.io/a-game/)
 # 荒域幸存者 v1.0
 
 一款单文件、离线可玩的俯视角波次生存射击游戏。双击 `index.html` 即可开始，不需要安装依赖，也不请求网络资源。
